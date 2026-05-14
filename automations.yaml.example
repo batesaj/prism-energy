@@ -1,0 +1,215 @@
+# ═══════════════════════════════════════════════════════════════
+# PRISM ENERGY INTELLIGENCE — AUTOMATIONS
+# /homeassistant/automations.yaml
+# ═══════════════════════════════════════════════════════════════
+
+# ─────────────────────────────────────────────────────────────
+# 1. PRISM EVENT DETECTED
+# Triggers when PRISM takes control of the inverter for export
+# ─────────────────────────────────────────────────────────────
+- id: prism_event_detected
+  alias: PRISM Event Detected
+  mode: single
+  triggers:
+    - trigger: state
+      entity_id: sensor.prism_export_window_active
+      to: "on"
+  actions:
+    - action: system_log.write
+      data:
+        message: >
+          PRISM EXPORT EVENT DETECTED
+          Mode={{ states('select.YOUR_INVERTER_SERIAL_mode') }}
+          Export={{ states('sensor.YOUR_INVERTER_SERIAL_export_power') }}W
+          Battery={{ states('sensor.YOUR_INVERTER_SERIAL_battery_power') }}W
+          SOC={{ states('sensor.YOUR_INVERTER_SERIAL_soc') }}%
+          Solar={{ states('sensor.YOUR_INVERTER_SERIAL_pv_power') }}W
+        level: warning
+    - action: input_datetime.set_datetime
+      target:
+        entity_id: input_datetime.prism_last_export_end
+      data:
+        datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+
+# ─────────────────────────────────────────────────────────────
+# 2. PRISM SAFETY NET WATCHDOG
+# If mode stays on Timed Demand or Timed Export beyond the
+# configured timeout, HA forces the system back to Eco.
+# NOTE: for: minutes uses a fixed value — templates not supported
+# in trigger for: field. Timeout enforced via condition check.
+# ─────────────────────────────────────────────────────────────
+- id: prism_safety_net_watchdog
+  alias: PRISM Safety Net Watchdog
+  mode: single
+  triggers:
+    - trigger: state
+      entity_id: select.YOUR_INVERTER_SERIAL_mode
+      to: "Timed Demand"
+      for:
+        minutes: 60
+    - trigger: state
+      entity_id: select.YOUR_INVERTER_SERIAL_mode
+      to: "Timed Export"
+      for:
+        minutes: 60
+  conditions:
+    - condition: template
+      value_template: >
+        {{ states('sensor.prism_export_window_active') == 'on'
+           or states('sensor.YOUR_INVERTER_SERIAL_export_power') | float(0) > 500 }}
+    - condition: template
+      value_template: >
+        {{ (now() - states.select.YOUR_INVERTER_SERIAL_mode.last_changed).total_seconds() / 60
+           >= states('input_number.prism_export_timeout_mins') | int(60) }}
+  actions:
+    - action: system_log.write
+      data:
+        message: >
+          PRISM SAFETY NET TRIGGERED — PRISM failed to return system to Eco.
+          Forcing recovery after {{ states('input_number.prism_export_timeout_mins') | int(60) }} mins.
+          Mode={{ states('select.YOUR_INVERTER_SERIAL_mode') }}
+          Export={{ states('sensor.YOUR_INVERTER_SERIAL_export_power') }}W
+        level: error
+    - action: select.select_option
+      target:
+        entity_id: select.YOUR_INVERTER_SERIAL_mode
+      data:
+        option: Eco
+    - delay:
+        seconds: 10
+    - action: switch.turn_on
+      target:
+        entity_id: switch.YOUR_INVERTER_SERIAL_eco_mode
+    - delay:
+        seconds: 10
+    - action: select.select_option
+      target:
+        entity_id: select.YOUR_INVERTER_SERIAL_force_export
+      data:
+        option: Normal
+    - action: system_log.write
+      data:
+        message: >
+          PRISM SAFETY NET COMPLETE — System returned to Eco.
+          SOC={{ states('sensor.YOUR_INVERTER_SERIAL_soc') }}%
+          Export={{ states('sensor.YOUR_INVERTER_SERIAL_export_power') }}W
+        level: warning
+
+# ─────────────────────────────────────────────────────────────
+# 3. PRISM RECOVERY VALIDATION
+# Runs when export window ends — validates PRISM restored state
+# correctly, corrects it if not.
+# ─────────────────────────────────────────────────────────────
+- id: prism_recovery_validation
+  alias: PRISM Recovery Validation
+  mode: single
+  triggers:
+    - trigger: state
+      entity_id: sensor.prism_export_window_active
+      to: "off"
+      for:
+        minutes: 3
+  conditions:
+    - condition: template
+      value_template: >
+        {{ states('sensor.YOUR_INVERTER_SERIAL_soc') | float(0) > 5 }}
+  actions:
+    - action: system_log.write
+      data:
+        message: >
+          PRISM RECOVERY CHECK
+          Mode={{ states('select.YOUR_INVERTER_SERIAL_mode') }}
+          EcoSwitch={{ states('switch.YOUR_INVERTER_SERIAL_eco_mode') }}
+          SOC={{ states('sensor.YOUR_INVERTER_SERIAL_soc') }}%
+          Export={{ states('sensor.YOUR_INVERTER_SERIAL_export_power') }}W
+    - choose:
+        - conditions:
+            - condition: template
+              value_template: >
+                {{ states('select.YOUR_INVERTER_SERIAL_mode') != 'Eco'
+                   or is_state('switch.YOUR_INVERTER_SERIAL_eco_mode', 'off') }}
+          sequence:
+            - action: system_log.write
+              data:
+                message: >
+                  PRISM did not restore Eco — HA correcting now.
+                level: warning
+            - action: select.select_option
+              target:
+                entity_id: select.YOUR_INVERTER_SERIAL_mode
+              data:
+                option: Eco
+            - delay:
+                seconds: 10
+            - action: switch.turn_on
+              target:
+                entity_id: switch.YOUR_INVERTER_SERIAL_eco_mode
+            - delay:
+                seconds: 10
+            - action: select.select_option
+              target:
+                entity_id: select.YOUR_INVERTER_SERIAL_force_export
+              data:
+                option: Normal
+            - action: system_log.write
+              data:
+                message: >
+                  PRISM RECOVERY CORRECTED — Eco restored by HA safety net.
+                level: warning
+        - conditions:
+            - condition: template
+              value_template: >
+                {{ states('select.YOUR_INVERTER_SERIAL_mode') == 'Eco'
+                   and is_state('switch.YOUR_INVERTER_SERIAL_eco_mode', 'on') }}
+          sequence:
+            - action: system_log.write
+              data:
+                message: >
+                  PRISM RECOVERY OK — System correctly returned to Eco by PRISM.
+      default:
+        - action: system_log.write
+          data:
+            message: >
+              PRISM RECOVERY UNKNOWN STATE — Mode={{ states('select.YOUR_INVERTER_SERIAL_mode') }}
+              EcoSwitch={{ states('switch.YOUR_INVERTER_SERIAL_eco_mode') }}
+              Manual check recommended.
+            level: warning
+
+# ─────────────────────────────────────────────────────────────
+# 4. PRISM CAPTURE PV BASELINE
+# Captures PV baseline when generating above 1kW.
+# Ignores captures during active PRISM export events.
+# Used by input_number.prism_pv_baseline for export headroom
+# calculations and the PV baseline display sensor.
+# ─────────────────────────────────────────────────────────────
+- id: prism_capture_pv_baseline
+  alias: PRISM Capture PV Baseline
+  mode: single
+  triggers:
+    - trigger: numeric_state
+      entity_id: sensor.YOUR_INVERTER_SERIAL_pv_power
+      above: 1000
+  conditions:
+    - condition: template
+      value_template: >
+        {{ (states('sensor.YOUR_INVERTER_SERIAL_pv_power') | float(0) -
+            states('sensor.YOUR_INVERTER_SERIAL_grid_power') | float(0)) > 200 }}
+    - condition: template
+      value_template: >
+        {{ states('sensor.prism_export_window_active') == 'off' }}
+  actions:
+    - action: input_number.set_value
+      target:
+        entity_id: input_number.prism_pv_baseline
+      data:
+        value: "{{ states('sensor.YOUR_INVERTER_SERIAL_pv_power') | float(0) }}"
+    - action: system_log.write
+      data:
+        message: >
+          PRISM BASELINE CAPTURED PV={{ states('sensor.YOUR_INVERTER_SERIAL_pv_power') }}W
+          GRID={{ states('sensor.YOUR_INVERTER_SERIAL_grid_power') }}W
+
+# ─────────────────────────────────────────────────────────────
+# NOTE: Accuracy and validation is handled entirely by PRISM v1.0
+# self_validate() which runs at 23:55 each night.
+# ─────────────────────────────────────────────────────────────

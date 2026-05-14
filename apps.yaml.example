@@ -1,0 +1,92 @@
+prism:
+  module: prism
+  class: PrismEngine
+
+  # ---------------------------------------------------------------------------
+  # INVERTER & SYSTEM
+  # Set inverter_prefix to match your GivEnergy integration entity prefix.
+  # Find it in HA Developer Tools — your entities will be sensor.<prefix>_soc etc.
+  # ---------------------------------------------------------------------------
+  inverter_prefix: "your_inverter_serial"   # e.g. YOUR_INVERTER_SERIAL
+  battery_capacity_kwh: 13.0
+  export_limit_kw: 4.5
+  inverter_limit_kw: 5.0
+  charge_power_kw: 5.0
+
+  # ---------------------------------------------------------------------------
+  # SOLAR ARRAY
+  # ---------------------------------------------------------------------------
+  num_panels_se: 10         # panels on SE-facing string
+  num_panels_nw: 10         # panels on NW-facing string
+  panel_rating_w: 440       # rated wattage per panel
+
+  # ---------------------------------------------------------------------------
+  # TARIFF & OPERATION
+  # Cheap rate window (24h clock, integers). Octopus Flux default: 2-5am.
+  # ---------------------------------------------------------------------------
+  cheap_rate_start: 2
+  cheap_rate_end: 5
+  soc_min_floor: 20         # minimum SOC % to hold in reserve
+  charge_safety_buffer: 5   # base buffer % — overridden dynamically by confidence
+  safe_mode_soc: 85         # SOC target when critical sensors unavailable
+  winter_solar_threshold: 15.0   # kWh below which winter full-charge triggers
+  bms_balance_days: 7       # days between forced 100% charge for cell balancing
+
+  # ---------------------------------------------------------------------------
+  # OCTOPUS FLUX RATES (p/kWh) — used for sensor.prism_savings_today estimate
+  # ---------------------------------------------------------------------------
+  rate_cheap_p: 7.5
+  rate_peak_p: 37.0
+  rate_offpeak_p: 20.0
+
+  # ---------------------------------------------------------------------------
+  # SHIFT CYCLE
+  # shift_cycle_ref is any Monday that anchors your 21-day cycle.
+  # ---------------------------------------------------------------------------
+  shift_cycle_ref: "2026-06-01"
+  shift_cycle_weeks: 3
+
+  # ---------------------------------------------------------------------------
+  # HEALTH CHECK
+  # Day of week for weekly OK notification: 0=Mon ... 6=Sun
+  # ---------------------------------------------------------------------------
+  health_check_day: 6
+
+  # ---------------------------------------------------------------------------
+  # GROWATT INTEGRATION (optional)
+  # Required only for bootstrap of solar correction factors from historical data.
+  # If not configured, corrections will be learned from live observations instead.
+  # NOTE: The Growatt openapi.growatt.com endpoint (newTwoLoginAPI.do) is
+  # currently returning 403. Bootstrap will be suppressed automatically on failure.
+  # ---------------------------------------------------------------------------
+  # growatt_plant_id: "YOUR_PLANT_ID"
+  # growatt_inverter_sn: "YOUR_INVERTER_SN"
+  # growatt_username: "your@email.com"
+  # growatt_password: "your-password"
+
+  # Growatt HA sensor entity IDs (from the Growatt integration)
+  growatt_se_sensor: "sensor.your_growatt_energy_today_input_1"
+  growatt_nw_sensor: "sensor.your_growatt_energy_today_input_2"
+  growatt_total_sensor: "sensor.your_growatt_energy_today"
+
+  # ---------------------------------------------------------------------------
+  # INVERTER SENSOR OVERRIDE MAP
+  # By default all entity IDs are built as sensor.<inverter_prefix>_<suffix>.
+  # Override any individual entity here — leave blank to use the prefix default.
+  # ---------------------------------------------------------------------------
+  # sensor_soc: ""
+  # sensor_battery_power: ""
+  # sensor_pv_power: ""
+  # sensor_load_power: ""
+  # sensor_grid_power: ""
+  # sensor_export_power: ""
+  # sensor_import_power: ""
+  # sensor_load_energy: ""
+  # sensor_pv_energy: ""
+  # control_mode: ""
+  # control_charge_switch: ""
+  # control_charge_start: ""
+  # control_charge_end: ""
+  # control_charge_target: ""
+  # control_charge_rate: ""
+  # control_discharge_rate: ""

@@ -1,0 +1,1253 @@
+title: PRISM Energy
+views:
+  - title: Live
+    path: live
+    icon: mdi:solar-power
+    cards:
+      - type: custom:power-flow-card-plus
+        entities:
+          grid:
+            entity: sensor.YOUR_INVERTER_SERIAL_grid_power
+            name: Grid
+            display_state: two_way
+            color_value: true
+            invert_state: true
+          battery:
+            entity: sensor.YOUR_INVERTER_SERIAL_battery_power
+            state_of_charge: sensor.YOUR_INVERTER_SERIAL_soc
+            name: Battery
+            color_value: true
+            icon: mdi:battery
+            charging_state:
+              entity_id: sensor.YOUR_INVERTER_SERIAL_battery_power
+              below: 0
+          solar:
+            entity: sensor.YOUR_INVERTER_SERIAL_pv_power
+            name: Solar
+            color_value: true
+            display_state: true
+            icon: mdi:solar-power
+          home:
+            entity: sensor.YOUR_INVERTER_SERIAL_load_power
+            name: Home
+            color_value: true
+            icon: mdi:home
+        display:
+          watt_threshold: 10
+          max_expected_power: 15000
+          min_flow_rate: 0.5
+          max_flow_rate: 8
+          use_new_flow_rate_model: true
+        dashboard:
+          title: PRISM Energy Flow
+          show_solar: true
+          show_battery: true
+          show_grid: true
+        circle_config:
+          show_inside_ratio: true
+          use_new_flow_rate_model: true
+      - type: glance
+        title: Live power
+        columns: 5
+        entities:
+          - entity: sensor.YOUR_INVERTER_SERIAL_pv_power
+            name: Solar
+            icon: mdi:solar-power
+          - entity: sensor.YOUR_INVERTER_SERIAL_load_power
+            name: Home
+            icon: mdi:home
+          - entity: sensor.YOUR_INVERTER_SERIAL_battery_power
+            name: Battery
+            icon: mdi:battery
+          - entity: sensor.YOUR_INVERTER_SERIAL_export_power
+            name: Export
+            icon: mdi:transmission-tower-export
+          - entity: sensor.YOUR_INVERTER_SERIAL_import_power
+            name: Import
+            icon: mdi:transmission-tower-import
+      - type: glance
+        title: Today's totals
+        columns: 6
+        entities:
+          - entity: sensor.YOUR_INVERTER_SERIAL_pv_energy_today_kwh
+            name: PV
+            icon: mdi:solar-power
+          - entity: sensor.YOUR_INVERTER_SERIAL_load_energy_today_kwh
+            name: Consumption
+            icon: mdi:home
+          - entity: sensor.YOUR_INVERTER_SERIAL_export_energy_today_kwh
+            name: Export
+            icon: mdi:transmission-tower-export
+          - entity: sensor.YOUR_INVERTER_SERIAL_import_energy_today_kwh
+            name: Import
+            icon: mdi:transmission-tower-import
+          - entity: sensor.YOUR_INVERTER_SERIAL_battery_charge_energy_today_kwh
+            name: Charged
+            icon: mdi:battery-charging
+          - entity: sensor.YOUR_INVERTER_SERIAL_battery_discharge_energy_today_kwh
+            name: Discharged
+            icon: mdi:battery-arrow-down
+      - type: glance
+        title: Solar strings
+        columns: 4
+        entities:
+          - entity: sensor.your_growatt_serial_input_1_wattage
+            name: SE live (W)
+            icon: mdi:solar-panel
+          - entity: sensor.your_growatt_serial_input_2_wattage
+            name: NW live (W)
+            icon: mdi:solar-panel
+          - entity: sensor.your_growatt_serial_energy_today_input_1
+            name: SE today (kWh)
+            icon: mdi:solar-power
+          - entity: sensor.your_growatt_serial_energy_today_input_2
+            name: NW today (kWh)
+            icon: mdi:solar-power
+      - type: custom:apexcharts-card
+        header:
+          title: Power & Battery - last 24h
+          show: true
+        graph_span: 24h
+        update_interval: '00:05:00'
+        all_series_config:
+          curve: smooth
+          extend_to: now
+          group_by:
+            func: avg
+            duration: 5min
+        apex_config:
+          chart:
+            height: 320
+            type: area
+            toolbar:
+              show: false
+            animations:
+              enabled: false
+          dataLabels:
+            enabled: false
+          stroke:
+            curve: smooth
+            width: 0
+          fill:
+            type: solid
+            opacity: 0.75
+          yaxis:
+            - id: power
+              seriesName: Solar
+              min: 0
+              max: 6000
+              tickAmount: 6
+              labels:
+                formatter: >-
+                  EVAL:function(val) { if(val >= 1000) return
+                  (val/1000).toFixed(1)+'kW'; return val.toFixed(0)+'W'; }
+                style:
+                  colors: '#aaaaaa'
+              title:
+                text: Power
+                style:
+                  color: '#aaaaaa'
+            - id: power
+              seriesName: Home Load
+              show: false
+            - id: power
+              seriesName: Battery Charge
+              show: false
+            - id: power
+              seriesName: Battery Discharge
+              show: false
+            - id: power
+              seriesName: Grid Import
+              show: false
+            - id: soc
+              seriesName: Battery SOC
+              opposite: true
+              min: 0
+              max: 100
+              tickAmount: 5
+              labels:
+                formatter: EVAL:function(val) { return val.toFixed(0)+'%'; }
+                style:
+                  colors: '#378ADD'
+              title:
+                text: SOC %
+                style:
+                  color: '#378ADD'
+          xaxis:
+            type: datetime
+            labels:
+              datetimeFormatter:
+                hour: HH:mm
+              rotate: 0
+              hideOverlappingLabels: true
+              style:
+                colors: '#aaaaaa'
+          grid:
+            borderColor: '#333333'
+            strokeDashArray: 3
+          legend:
+            show: true
+            position: top
+            labels:
+              colors: '#cccccc'
+          tooltip:
+            shared: true
+            x:
+              format: HH:mm
+          annotations:
+            yaxis:
+              - 'y': 20
+                seriesName: Battery SOC
+                borderColor: '#E24B4A'
+                borderWidth: 1
+                strokeDashArray: 4
+                label:
+                  text: Floor 20%
+                  style:
+                    color: '#E24B4A'
+                    background: transparent
+        series:
+          - entity: sensor.YOUR_INVERTER_SERIAL_pv_power
+            name: Solar
+            yaxis_id: power
+            color: '#EF9F27'
+            type: area
+          - entity: sensor.YOUR_INVERTER_SERIAL_load_power
+            name: Home Load
+            yaxis_id: power
+            color: '#1D9E75'
+            type: area
+          - entity: sensor.battery_charge_power
+            name: Battery Charge
+            yaxis_id: power
+            color: '#378ADD'
+            type: area
+          - entity: sensor.battery_discharge_power
+            name: Battery Discharge
+            yaxis_id: power
+            color: '#5ba3f5'
+            type: area
+          - entity: sensor.YOUR_INVERTER_SERIAL_import_power
+            name: Grid Import
+            yaxis_id: power
+            color: '#E24B4A'
+            type: area
+          - entity: sensor.YOUR_INVERTER_SERIAL_soc
+            name: Battery SOC
+            yaxis_id: soc
+            color: '#378ADD'
+            type: line
+            stroke_width: 2.5
+            opacity: 1
+      - type: gauge
+        entity: sensor.YOUR_INVERTER_SERIAL_soc
+        name: Battery SOC
+        unit: '%'
+        min: 0
+        max: 100
+        severity:
+          green: 50
+          yellow: 20
+          red: 0
+      - type: entities
+        title: Battery detail
+        entities:
+          - entity: sensor.YOUR_INVERTER_SERIAL_soc
+            name: State of charge
+          - entity: sensor.YOUR_INVERTER_SERIAL_soc_kwh
+            name: SOC (kWh)
+          - entity: sensor.YOUR_INVERTER_SERIAL_battery_capacity_kwh
+            name: Capacity (kWh)
+          - entity: sensor.YOUR_INVERTER_SERIAL_battery_voltage
+            name: Voltage
+          - entity: sensor.YOUR_INVERTER_SERIAL_battery_current
+            name: Current
+          - entity: sensor.YOUR_INVERTER_SERIAL_invertor_temperature
+            name: Inverter temp
+      - type: entities
+        title: Grid & system
+        entities:
+          - entity: sensor.YOUR_INVERTER_SERIAL_grid_voltage
+            name: Grid voltage
+          - entity: sensor.YOUR_INVERTER_SERIAL_grid_frequency
+            name: Grid frequency
+          - entity: sensor.YOUR_INVERTER_SERIAL_export_limit
+            name: Export limit (W)
+          - entity: sensor.YOUR_INVERTER_SERIAL_status
+            name: Inverter status
+          - entity: sensor.YOUR_INVERTER_SERIAL_last_updated_time
+            name: Last updated
+      - type: glance
+        title: PRISM event monitor
+        columns: 3
+        entities:
+          - entity: sensor.prism_export_window_active
+            name: Export active
+            icon: mdi:lightning-bolt
+          - entity: sensor.prism_event_state
+            name: Event state
+            icon: mdi:state-machine
+          - entity: sensor.prism_solar_cutout_risk
+            name: Cutout risk
+            icon: mdi:solar-power-variant-outline
+      - type: entities
+        title: Export breakdown
+        entities:
+          - entity: sensor.YOUR_INVERTER_SERIAL_export_power
+            name: Total export
+          - entity: sensor.prism_solar_export_contribution
+            name: Solar contribution
+          - entity: sensor.prism_battery_export_contribution
+            name: Battery contribution
+          - entity: sensor.prism_export_limit_headroom
+            name: Headroom to limit
+
+  - title: PRISM Brain
+    path: prism-brain
+    icon: mdi:brain
+    cards:
+      - show_name: true
+        show_icon: true
+        show_state: true
+        type: glance
+        title: PRISM v1.0 system state
+        columns: 4
+        entities:
+          - entity: sensor.prism_status
+            name: Engine
+            icon: mdi:brain
+          - entity: sensor.prism_health_status
+            name: Health
+            icon: mdi:heart-pulse
+          - entity: sensor.energy_system_health
+            name: Energy Health
+            icon: mdi:solar-power
+          - entity: sensor.prism_forecast_confidence
+            name: Confidence
+            icon: mdi:check-decagram
+      - type: glance
+        title: Insights
+        columns: 3
+        entities:
+          - entity: sensor.energy_insight
+            name: Energy
+            icon: mdi:lightning-bolt
+          - entity: sensor.cost_insight
+            name: Rate
+            icon: mdi:cash
+          - entity: sensor.prism_export_window_state
+            name: Export
+            icon: mdi:transmission-tower-export
+      - type: markdown
+        title: Tonight's charge decision
+        content: >
+          {% set charge = state_attr('sensor.prism_charge_decision',
+          'charge_needed') %}
+
+          {% set target = states('sensor.prism_charge_decision') %}
+
+          {% set is_preview = state_attr('sensor.prism_charge_decision',
+          'is_preview') | default(false) %}
+
+          {% set preview_hour = state_attr('sensor.prism_charge_decision',
+          'preview_hour') | default('') %}
+
+          {% set reason = state_attr('sensor.prism_charge_decision', 'reason') |
+          default('') %}
+
+          {% set solar = state_attr('sensor.prism_charge_decision', 'solar_kwh')
+          | float(0) %}
+
+          {% set load = state_attr('sensor.prism_charge_decision', 'load_kwh') |
+          float(0) %}
+
+          {% set eve = state_attr('sensor.prism_charge_decision',
+          'min_soc_evening') | float(0) %}
+
+          {% set conf = state_attr('sensor.prism_charge_decision', 'confidence')
+          | float(0) %}
+
+          {% set weather = state_attr('sensor.prism_charge_decision',
+          'weather_class') | default('') %}
+
+          {% if is_preview %}_Preview at {{ preview_hour }}:00 - final decision
+          at 01:30_{% endif %}
+
+
+          {% if charge == true %}
+
+          **Charging to {{ target }}% tonight (02:00-05:00)**
+
+          {% elif charge == false %}
+
+          **No overnight charge needed**
+
+          {% else %}
+
+          **Decision pending - runs at 01:30**
+
+          {% endif %}
+
+
+          Solar p50 {{ solar | round(1) }} kWh / Load {{ load | round(1) }} kWh
+          / Net {{ (solar - load) | round(1) }} kWh
+
+
+          Evening min SOC {{ eve | round(1) }}% / Confidence {{ (conf * 100) |
+          round(0) | int }}% / Weather {{ weather }}
+
+
+          _{{ reason }}_
+
+      - type: glance
+        title: Decision detail
+        columns: 3
+        entities:
+          - entity: sensor.prism_decision_solar_kwh
+            name: Solar forecast
+            icon: mdi:weather-sunny
+          - entity: sensor.prism_decision_load_kwh
+            name: Load forecast
+            icon: mdi:home
+          - entity: sensor.prism_net_energy_tomorrow
+            name: Net energy
+            icon: mdi:scale-balance
+          - entity: sensor.prism_eve_p10_soc
+            name: Eve SOC p10
+            icon: mdi:battery-low
+          - entity: sensor.prism_decision_min_soc
+            name: Eve SOC p50
+            icon: mdi:battery-medium
+          - entity: sensor.prism_eve_p90_soc
+            name: Eve SOC p90
+            icon: mdi:battery-high
+          - entity: sensor.prism_forecast_weather_class
+            name: Weather
+            icon: mdi:cloud
+          - entity: sensor.prism_forecast_confidence
+            name: Confidence
+            icon: mdi:check-decagram
+          - entity: sensor.prism_solar_correction_factor
+            name: Correction
+            icon: mdi:tune
+
+      - type: custom:apexcharts-card
+        header:
+          title: Hourly simulation - SOC prediction
+          show: true
+        update_interval: '00:05:00'
+        series:
+          - entity: sensor.prism_soc_simulation_curve
+            name: Predicted SOC
+            color: '#378ADD'
+            yaxis_id: soc
+            data_generator: |
+              const curve = entity.attributes.curve;
+              if (!curve || !Array.isArray(curve)) return [];
+              return curve.map(p => [new Date(p.t).getTime(), p.soc]);
+          - entity: sensor.prism_soc_simulation_curve
+            name: Solar (kWh)
+            color: '#EF9F27'
+            yaxis_id: power
+            data_generator: |
+              const curve = entity.attributes.curve;
+              if (!curve || !Array.isArray(curve)) return [];
+              return curve.map(p => [new Date(p.t).getTime(), p.pv_kwh || 0]);
+        apex_config:
+          chart:
+            height: 220
+            toolbar:
+              show: false
+          yaxis:
+            - id: soc
+              min: 0
+              max: 100
+              tickAmount: 5
+            - id: power
+              opposite: true
+              min: 0
+              max: 6
+              tickAmount: 3
+          xaxis:
+            type: datetime
+            labels:
+              datetimeFormatter:
+                hour: HH:mm
+              rotate: 0
+              hideOverlappingLabels: true
+          annotations:
+            yaxis:
+              - 'y': 20
+                borderColor: '#E24B4A'
+                borderWidth: 1
+                strokeDashArray: 4
+                label:
+                  text: Floor 20%
+                  style:
+                    color: '#E24B4A'
+                    background: transparent
+          stroke:
+            curve: smooth
+            width: 2
+          grid:
+            borderColor: '#404040'
+          legend:
+            show: true
+            position: top
+          fill:
+            type: gradient
+            gradient:
+              shadeIntensity: 0.1
+
+      - type: entities
+        title: Today - Generation vs Forecast
+        entities:
+          - entity: sensor.your_growatt_serial_energy_today
+            name: Solar generated today (actual)
+            icon: mdi:solar-power
+          - entity: sensor.solcast_forecast_today_capped
+            name: Solar forecast today - Solcast (capped)
+            icon: mdi:weather-sunny
+          - entity: sensor.prism_solar_forecast_today
+            name: Solar forecast today - PRISM
+            icon: mdi:brain
+          - entity: sensor.YOUR_INVERTER_SERIAL_load_energy_today_kwh
+            name: Home load today (actual)
+            icon: mdi:home
+          - entity: sensor.prism_load_forecast_today
+            name: Home load forecast - PRISM
+            icon: mdi:brain
+          - entity: sensor.solcast_pv_forecast_power_now
+            name: Generating now (W)
+            icon: mdi:solar-power-variant
+          - type: divider
+          - entity: sensor.prism_solar_correction_factor
+            name: PRISM solar correction factor
+            icon: mdi:tune
+          - entity: sensor.prism_mae_7d
+            name: 7-day MAE
+            icon: mdi:chart-bell-curve
+          - entity: sensor.prism_confidence_trend
+            name: 7-day accuracy trend
+            icon: mdi:trending-up
+          - entity: sensor.prism_savings_today
+            name: Estimated savings today
+            icon: mdi:cash-plus
+
+      - type: entities
+        title: Tomorrow - 24hr Ahead Forecast
+        entities:
+          - entity: sensor.prism_preview_updated
+            name: Preview last updated (final at 01:30)
+            icon: mdi:clock-check
+          - type: divider
+          - entity: sensor.solcast_forecast_tomorrow_capped
+            name: Solar forecast - Solcast
+            icon: mdi:weather-sunny
+          - entity: sensor.prism_tomorrow_solar_p10
+            name: Solar forecast - PRISM pessimistic (p10)
+            icon: mdi:weather-cloudy
+          - entity: sensor.prism_tomorrow_solar_p50
+            name: Solar forecast - PRISM expected (p50)
+            icon: mdi:brain
+          - entity: sensor.prism_tomorrow_solar_p90
+            name: Solar forecast - PRISM optimistic (p90)
+            icon: mdi:weather-sunny
+          - entity: sensor.prism_tomorrow_load
+            name: Home load forecast
+            icon: mdi:home-clock
+          - entity: sensor.prism_tomorrow_net_energy
+            name: Net energy tomorrow
+            icon: mdi:scale-balance
+          - type: divider
+          - entity: sensor.prism_tomorrow_eve_p10
+            name: Evening battery - pessimistic (p10)
+            icon: mdi:battery-low
+          - entity: sensor.prism_tomorrow_eve_p50
+            name: Evening battery - expected (p50)
+            icon: mdi:battery-medium
+          - entity: sensor.prism_tomorrow_eve_p90
+            name: Evening battery - optimistic (p90)
+            icon: mdi:battery-high
+          - type: divider
+          - entity: sensor.prism_tomorrow_weather
+            name: Weather forecast
+            icon: mdi:cloud
+          - entity: sensor.prism_tomorrow_shift
+            name: Shift tomorrow
+            icon: mdi:account-clock
+          - entity: sensor.prism_tomorrow_charge_needed
+            name: Grid charge needed tonight
+            icon: mdi:battery-charging
+
+      - type: markdown
+        title: Last prediction vs reality
+        content: >
+          {% set date = state_attr('sensor.prism_soc_simulation_curve',
+          'decision_date') | default('') %}
+
+          {% set shift = state_attr('sensor.prism_soc_simulation_curve',
+          'shift_type') | default('') %}
+
+          {% set solar_pred = state_attr('sensor.prism_soc_simulation_curve',
+          'solar_forecast') | float(0) %}
+
+          {% set min_soc = state_attr('sensor.prism_soc_simulation_curve',
+          'min_soc_predicted') | float(0) %}
+
+          {% set min_h = state_attr('sensor.prism_soc_simulation_curve',
+          'min_soc_hour') | default(0) %}
+
+          {% set max_soc = state_attr('sensor.prism_soc_simulation_curve',
+          'max_soc_predicted') | float(0) %}
+
+          {% set charge = state_attr('sensor.prism_soc_simulation_curve',
+          'charge_needed') %}
+
+          {% set reason = state_attr('sensor.prism_soc_simulation_curve',
+          'reason') | default('') %}
+
+          {% set actual_soc = states('sensor.YOUR_INVERTER_SERIAL_soc') | float(0) %}
+
+          {% set actual_solar = states('sensor.your_growatt_serial_energy_today') |
+          float(0) %}
+
+          {% set error = min_soc - actual_soc %}
+
+          {% set accuracy = states('input_number.prism_soc_accuracy_score') |
+          float(0) %}
+
+
+          **{{ date }} - {{ shift }}**
+
+
+          Solar predicted {{ solar_pred | round(1) }} kWh / actual {{
+          actual_solar | round(1) }} kWh
+
+
+          Min SOC predicted {{ min_soc | round(1) }}% at {{ min_h }}:00 / actual
+          {{ actual_soc | round(1) }}% now
+
+
+          Max SOC {{ max_soc | round(1) }}% / Charge {{ 'Yes' if charge else
+          'No' }}
+
+
+          {% if error | abs < 5 %}Tracking well - error {{ error | round(1) }}%
+          / accuracy {{ accuracy | round(0) | int }}%
+
+          {% elif error | abs < 15 %}Moderate deviation - error {{ error |
+          round(1) }}% / accuracy {{ accuracy | round(0) | int }}%
+
+          {% else %}Significant deviation - error {{ error | round(1) }}% /
+          accuracy {{ accuracy | round(0) | int }}%
+
+          {% endif %}
+
+
+          _{{ reason }}_
+
+      - type: entities
+        title: Today's conditions
+        entities:
+          - entity: sensor.your_growatt_serial_energy_today
+            name: Solar generated today (actual)
+            icon: mdi:solar-power
+          - entity: sensor.solcast_forecast_today_capped
+            name: Solar forecast today - Solcast (capped)
+            icon: mdi:weather-sunny
+          - entity: sensor.solcast_power_now_capped
+            name: Generating now (W)
+            icon: mdi:solar-power-variant
+          - entity: sensor.YOUR_INVERTER_SERIAL_load_energy_today_kwh
+            name: Home load today (actual)
+            icon: mdi:home
+          - entity: sensor.prism_weather_condition
+            name: Weather condition
+            icon: mdi:cloud
+          - entity: sensor.prism_precipitation_probability_now
+            name: Precipitation probability now
+            icon: mdi:weather-rainy
+          - entity: sensor.prism_precipitation_today
+            name: Precipitation today (mm)
+            icon: mdi:weather-pouring
+          - entity: sensor.prism_ambient_temp_now
+            name: Temperature now
+            icon: mdi:thermometer
+          - entity: sensor.prism_ambient_temp_forecast_low
+            name: Forecast low
+            icon: mdi:thermometer-chevron-down
+          - entity: sensor.prism_ambient_temp_forecast_high
+            name: Forecast high
+            icon: mdi:thermometer-chevron-up
+          - entity: sensor.prism_degree_days_today
+            name: Degree days (heating)
+            icon: mdi:radiator
+          - entity: sensor.prism_heating_demand_predicted
+            name: Heating demand
+            icon: mdi:fire
+          - entity: sensor.prism_day_type
+            name: Day type today
+            icon: mdi:calendar
+          - entity: sensor.prism_free_energy_opportunity
+            name: Free energy opportunity
+            icon: mdi:lightning-bolt-circle
+          - entity: sensor.prism_evening_min_soc_actual
+            name: Evening min SOC (actual, from 17:00)
+            icon: mdi:battery-clock
+            availability: "{{ states('sensor.prism_evening_min_soc_actual') not in ['unknown', 'unavailable'] }}"
+
+      - type: entities
+        title: Tomorrow's conditions
+        entities:
+          - entity: sensor.solcast_forecast_tomorrow_capped
+            name: Solar forecast tomorrow - Solcast
+            icon: mdi:weather-sunny
+          - entity: sensor.solcast_peak_tomorrow_capped
+            name: Solcast peak tomorrow (W)
+            icon: mdi:solar-power-variant
+          - entity: sensor.solcast_peak_time_tomorrow
+            name: Solcast peak time tomorrow
+            icon: mdi:clock-outline
+          - entity: sensor.prism_tomorrow_solar_p50
+            name: PRISM solar forecast p50
+            icon: mdi:calendar-today
+          - entity: sensor.prism_tomorrow_solar_p10
+            name: PRISM solar forecast p10 (pessimistic)
+            icon: mdi:calendar-minus
+          - entity: sensor.prism_tomorrow_solar_p90
+            name: PRISM solar forecast p90 (optimistic)
+            icon: mdi:calendar-plus
+          - entity: sensor.prism_tomorrow_load
+            name: PRISM load forecast
+            icon: mdi:home-clock
+          - entity: sensor.prism_tomorrow_net_energy
+            name: Net energy tomorrow
+            icon: mdi:scale-balance
+          - entity: sensor.prism_tomorrow_weather
+            name: Weather class tomorrow
+            icon: mdi:cloud
+          - entity: sensor.prism_precipitation_tomorrow
+            name: Precipitation tomorrow (mm)
+            icon: mdi:weather-pouring
+          - entity: sensor.prism_tomorrow_charge_needed
+            name: Charge needed tonight
+            icon: mdi:battery-charging
+          - entity: sensor.prism_tomorrow_shift
+            name: Shift tomorrow
+            icon: mdi:account-clock
+          - entity: sensor.prism_preview_updated
+            name: Preview last updated
+            icon: mdi:clock-check
+
+      - type: markdown
+        title: PRISM v1.0 learning progress
+        content: >
+          {% set obs = state_attr('sensor.prism_status', 'observations') |
+          int(0) %} {% set hist = state_attr('sensor.prism_status',
+          'decision_history_count') | int(0) %} {% set accuracy =
+          states('input_number.prism_soc_accuracy_score') | float(0) %} {% set
+          error = states('input_number.prism_soc_forecast_error') | float(0) %}
+          {% set confidence = states('sensor.prism_forecast_confidence') | int(0)
+          %} {% set last_obs = state_attr('sensor.prism_status',
+          'last_observation') %} {% set last_dec =
+          state_attr('sensor.prism_status', 'last_decision') %} {% set
+          correction = states('sensor.prism_solar_correction_factor') | float(0)
+          %} {% set mae = states('sensor.prism_mae_7d') | float(0) %} {% set
+          trend = states('sensor.prism_confidence_trend') | float(0) %}
+
+          **Engine status** {{ states('sensor.prism_status') }}
+          **Observations recorded** {{ obs }}
+          **Decision history** {{ hist }} records
+          **Forecast accuracy** {{ accuracy | round(1) }}%
+          **Forecast error correction** {{ error | round(1) }}%
+          **Model confidence** {{ confidence }}%
+          **7-day MAE** {{ mae | round(2) }}%
+          **7-day accuracy trend** {{ trend | round(1) }}%
+          **Solar correction factor** {{ correction | round(3) }}
+          **Last observation** {{ last_obs or 'pending' }}
+          **Last decision** {{ last_dec[:10] if last_dec else 'pending' }}
+
+      - type: entities
+        title: PRISM health detail
+        entities:
+          - entity: sensor.prism_health_status
+            name: Health status
+            icon: mdi:heart-pulse
+          - type: attribute
+            entity: sensor.prism_health_status
+            attribute: checks_passed
+            name: Checks passed
+            icon: mdi:check-circle
+          - type: attribute
+            entity: sensor.prism_health_status
+            attribute: checks_total
+            name: Checks total
+            icon: mdi:circle-outline
+          - type: attribute
+            entity: sensor.prism_health_status
+            attribute: last_check
+            name: Last check
+            icon: mdi:clock-outline
+
+      - type: custom:apexcharts-card
+        header:
+          title: Forecast accuracy - 14 days
+          show: true
+        graph_span: 14d
+        apex_config:
+          chart:
+            height: 140
+            toolbar:
+              show: false
+          yaxis:
+            min: 0
+            max: 100
+            tickAmount: 4
+            labels:
+              formatter: EVAL:function(val) { return val.toFixed(0) + '%' }
+          xaxis:
+            type: datetime
+            labels:
+              datetimeFormatter:
+                day: dd MMM
+              rotate: 0
+              hideOverlappingLabels: true
+          stroke:
+            curve: smooth
+            width: 2
+          fill:
+            type: gradient
+            gradient:
+              shadeIntensity: 0.2
+              opacityFrom: 0.3
+              opacityTo: 0
+          grid:
+            borderColor: '#404040'
+          annotations:
+            yaxis:
+              - 'y': 80
+                borderColor: '#1D9E75'
+                borderWidth: 1
+                strokeDashArray: 3
+                label:
+                  text: Good
+                  style:
+                    color: '#1D9E75'
+                    background: transparent
+        series:
+          - entity: input_number.prism_soc_accuracy_score
+            name: Accuracy
+            color: '#1D9E75'
+
+      - type: markdown
+        title: Model parameters
+        content: >
+          {% set capacity = states('input_number.prism_battery_capacity') |
+          float(0) %} {% set timeout =
+          states('input_number.prism_export_timeout_mins') | float(0) %}
+
+          **Battery capacity** {{ capacity }} kWh
+          **Grid charge rate** 5.0 kW (02:00-05:00)
+          **Export limit** 4.5 kW
+          **SOC floor** 20%
+          **Export safety timeout** {{ timeout | int }} mins
+
+      - type: button
+        name: Maintenance Override
+        entity: input_boolean.energy_maintenance_mode
+        icon: mdi:account-wrench
+        tap_action:
+          action: toggle
+
+  - title: Costs
+    path: costs
+    icon: mdi:cash
+    cards:
+      - type: glance
+        title: Octopus Flux rates now
+        columns: 3
+        entities:
+          - entity: >-
+              sensor.octopus_energy_electricity_YOUR_MPAN_YOUR_SERIAL_current_rate
+            name: Import now
+            icon: mdi:cash
+          - entity: >-
+              sensor.octopus_energy_electricity_YOUR_MPAN_YOUR_EXPORT_SERIAL_export_current_rate
+            name: Export now
+            icon: mdi:cash-plus
+          - entity: sensor.prism_free_energy_opportunity
+            name: Opportunity
+            icon: mdi:lightning-bolt-circle
+      - type: entities
+        title: Octopus Flux - rate windows
+        entities:
+          - entity: >-
+              sensor.octopus_energy_electricity_YOUR_MPAN_YOUR_SERIAL_previous_rate
+            name: Import previous
+            icon: mdi:cash
+          - entity: >-
+              sensor.octopus_energy_electricity_YOUR_MPAN_YOUR_SERIAL_current_rate
+            name: Import now
+            icon: mdi:cash
+          - entity: >-
+              sensor.octopus_energy_electricity_YOUR_MPAN_YOUR_SERIAL_next_rate
+            name: Import next
+            icon: mdi:cash
+          - entity: >-
+              sensor.octopus_energy_electricity_YOUR_MPAN_YOUR_EXPORT_SERIAL_export_current_rate
+            name: Export now
+            icon: mdi:cash-plus
+          - entity: >-
+              sensor.octopus_energy_electricity_YOUR_MPAN_YOUR_EXPORT_SERIAL_export_next_rate
+            name: Export next
+            icon: mdi:cash-plus
+          - entity: >-
+              binary_sensor.octopus_energy_electricity_YOUR_MPAN_YOUR_SERIAL_off_peak
+            name: Currently off-peak
+            icon: mdi:clock-outline
+          - entity: >-
+              sensor.octopus_energy_electricity_YOUR_MPAN_YOUR_SERIAL_current_standing_charge
+            name: Standing charge
+            icon: mdi:cash
+      - type: custom:apexcharts-card
+        header:
+          title: Import rate - last 24h
+          show: true
+        graph_span: 24h
+        apex_config:
+          chart:
+            height: 180
+            toolbar:
+              show: false
+          yaxis:
+            min: 0
+            labels:
+              formatter: EVAL:function(val) { return 'p' + (val*100).toFixed(1) }
+          xaxis:
+            type: datetime
+            labels:
+              datetimeFormatter:
+                hour: HH:mm
+              rotate: 0
+              hideOverlappingLabels: true
+          stroke:
+            curve: stepline
+            width: 2
+          grid:
+            borderColor: '#404040'
+        series:
+          - entity: >-
+              sensor.octopus_energy_electricity_YOUR_MPAN_YOUR_SERIAL_current_rate
+            name: Import rate
+            color: '#E24B4A'
+          - entity: >-
+              sensor.octopus_energy_electricity_YOUR_MPAN_YOUR_EXPORT_SERIAL_export_current_rate
+            name: Export rate
+            color: '#1D9E75'
+      - type: glance
+        title: Today's electricity
+        columns: 2
+        entities:
+          - entity: >-
+              sensor.octopus_energy_electricity_YOUR_MPAN_YOUR_SERIAL_current_accumulative_consumption
+            name: Import kWh
+            icon: mdi:transmission-tower-import
+          - entity: >-
+              sensor.octopus_energy_electricity_YOUR_MPAN_YOUR_SERIAL_current_accumulative_cost
+            name: Import cost
+            icon: mdi:cash
+          - entity: >-
+              sensor.octopus_energy_electricity_YOUR_MPAN_YOUR_EXPORT_SERIAL_export_previous_accumulative_consumption
+            name: Export kWh
+            icon: mdi:transmission-tower-export
+          - entity: >-
+              sensor.octopus_energy_electricity_YOUR_MPAN_YOUR_EXPORT_SERIAL_export_previous_accumulative_cost
+            name: Export earned
+            icon: mdi:cash-plus
+      - type: glance
+        title: Yesterday's electricity
+        columns: 2
+        entities:
+          - entity: >-
+              sensor.octopus_energy_electricity_YOUR_MPAN_YOUR_SERIAL_previous_accumulative_consumption
+            name: Import kWh
+            icon: mdi:transmission-tower-import
+          - entity: >-
+              sensor.octopus_energy_electricity_YOUR_MPAN_YOUR_SERIAL_previous_accumulative_cost
+            name: Import cost
+            icon: mdi:cash
+          - entity: >-
+              sensor.octopus_energy_electricity_YOUR_MPAN_YOUR_EXPORT_SERIAL_export_previous_accumulative_consumption
+            name: Export kWh
+            icon: mdi:transmission-tower-export
+          - entity: >-
+              sensor.octopus_energy_electricity_YOUR_MPAN_YOUR_EXPORT_SERIAL_export_previous_accumulative_cost
+            name: Export earned
+            icon: mdi:cash-plus
+      - type: entities
+        title: Gas
+        entities:
+          - entity: sensor.octopus_energy_gas_YOUR_MPRN_YOUR_GAS_SERIAL_current_rate
+            name: Rate (p/kWh)
+            icon: mdi:fire
+          - entity: >-
+              sensor.octopus_energy_gas_YOUR_MPRN_YOUR_GAS_SERIAL_current_standing_charge
+            name: Standing charge
+            icon: mdi:cash
+          - entity: >-
+              sensor.octopus_energy_gas_YOUR_MPRN_YOUR_GAS_SERIAL_current_accumulative_consumption_kwh
+            name: Today (kWh)
+            icon: mdi:fire
+          - entity: >-
+              sensor.octopus_energy_gas_YOUR_MPRN_YOUR_GAS_SERIAL_current_accumulative_cost
+            name: Today cost
+            icon: mdi:cash
+          - entity: >-
+              sensor.octopus_energy_gas_YOUR_MPRN_YOUR_GAS_SERIAL_previous_accumulative_consumption_kwh
+            name: Yesterday (kWh)
+            icon: mdi:fire
+          - entity: >-
+              sensor.octopus_energy_gas_YOUR_MPRN_YOUR_GAS_SERIAL_previous_accumulative_cost
+            name: Yesterday cost
+            icon: mdi:cash
+      - type: entities
+        title: Octoplus
+        entities:
+          - entity: sensor.octopus_energy_YOUR_ACCOUNT_ID_octoplus_points
+            name: Points balance
+            icon: mdi:star
+          - entity: binary_sensor.octopus_energy_YOUR_ACCOUNT_ID_octoplus_saving_sessions
+            name: Saving session active
+            icon: mdi:flash
+
+  - title: Controls
+    path: controls
+    icon: mdi:lightning-bolt-circle
+    cards:
+      - type: glance
+        title: Inverter mode
+        columns: 3
+        entities:
+          - entity: select.YOUR_INVERTER_SERIAL_mode
+            name: Mode
+            icon: mdi:cog
+          - entity: switch.YOUR_INVERTER_SERIAL_eco_mode
+            name: Eco mode
+            icon: mdi:leaf
+          - entity: switch.YOUR_INVERTER_SERIAL_real_time_control
+            name: Real time
+            icon: mdi:timer-outline
+      - type: entities
+        title: Force controls
+        show_header_toggle: false
+        entities:
+          - entity: select.YOUR_INVERTER_SERIAL_force_charge
+            name: Force charge
+            icon: mdi:battery-charging
+          - entity: number.YOUR_INVERTER_SERIAL_force_charge_num
+            name: Force charge duration (mins)
+            icon: mdi:timer
+          - type: divider
+          - entity: select.YOUR_INVERTER_SERIAL_force_export
+            name: Force export
+            icon: mdi:transmission-tower-export
+          - entity: number.YOUR_INVERTER_SERIAL_force_export_num
+            name: Force export duration (mins)
+            icon: mdi:timer
+      - type: entities
+        title: Charge schedule (PRISM managed)
+        show_header_toggle: false
+        entities:
+          - entity: switch.YOUR_INVERTER_SERIAL_enable_charge_schedule
+            name: Enable charge schedule
+            icon: mdi:calendar-check
+          - entity: switch.YOUR_INVERTER_SERIAL_enable_charge_target
+            name: Enable charge target
+            icon: mdi:target
+          - type: section
+            label: Slot 1 - 02:00 to 05:00 (Flux cheap rate)
+          - entity: select.YOUR_INVERTER_SERIAL_charge_start_time_slot_1
+            name: Start time
+            icon: mdi:clock-start
+          - entity: select.YOUR_INVERTER_SERIAL_charge_end_time_slot_1
+            name: End time
+            icon: mdi:clock-end
+          - entity: number.YOUR_INVERTER_SERIAL_charge_target_soc_1
+            name: Target SOC % (set by PRISM)
+            icon: mdi:battery-heart
+          - type: section
+            label: Slot 2 (manual override only)
+          - entity: select.YOUR_INVERTER_SERIAL_charge_start_time_slot_2
+            name: Start time
+            icon: mdi:clock-start
+          - entity: select.YOUR_INVERTER_SERIAL_charge_end_time_slot_2
+            name: End time
+            icon: mdi:clock-end
+          - entity: number.YOUR_INVERTER_SERIAL_charge_target_soc_2
+            name: Target SOC %
+            icon: mdi:battery-heart
+          - type: section
+            label: Charge rate
+          - entity: number.YOUR_INVERTER_SERIAL_battery_charge_rate
+            name: Charge rate (W)
+            icon: mdi:flash
+          - entity: number.YOUR_INVERTER_SERIAL_battery_charge_rate_ac
+            name: Charge rate AC (%)
+            icon: mdi:flash-outline
+      - type: entities
+        title: Discharge schedule
+        show_header_toggle: false
+        entities:
+          - entity: switch.YOUR_INVERTER_SERIAL_enable_discharge_schedule
+            name: Enable discharge schedule
+            icon: mdi:calendar-remove
+          - type: section
+            label: Slot 1
+          - entity: select.YOUR_INVERTER_SERIAL_discharge_start_time_slot_1
+            name: Start time
+            icon: mdi:clock-start
+          - entity: select.YOUR_INVERTER_SERIAL_discharge_end_time_slot_1
+            name: End time
+            icon: mdi:clock-end
+          - entity: number.YOUR_INVERTER_SERIAL_discharge_target_soc_1
+            name: Floor SOC %
+            icon: mdi:battery-low
+          - type: section
+            label: Slot 2
+          - entity: select.YOUR_INVERTER_SERIAL_discharge_start_time_slot_2
+            name: Start time
+            icon: mdi:clock-start
+          - entity: select.YOUR_INVERTER_SERIAL_discharge_end_time_slot_2
+            name: End time
+            icon: mdi:clock-end
+          - entity: number.YOUR_INVERTER_SERIAL_discharge_target_soc_2
+            name: Floor SOC %
+            icon: mdi:battery-low
+          - type: section
+            label: Discharge rate
+          - entity: number.YOUR_INVERTER_SERIAL_battery_discharge_rate
+            name: Discharge rate (W)
+            icon: mdi:flash-off
+          - entity: number.YOUR_INVERTER_SERIAL_battery_discharge_rate_ac
+            name: Discharge rate AC (%)
+            icon: mdi:flash-off
+      - type: glance
+        title: Battery protection
+        columns: 3
+        entities:
+          - entity: number.YOUR_INVERTER_SERIAL_battery_power_reserve
+            name: Reserve %
+            icon: mdi:battery-lock
+          - entity: number.YOUR_INVERTER_SERIAL_battery_power_cutoff
+            name: Cutoff %
+            icon: mdi:battery-alert
+          - entity: number.YOUR_INVERTER_SERIAL_active_power_rate
+            name: Power rate %
+            icon: mdi:percent
+      - type: entities
+        title: Pause battery
+        show_header_toggle: false
+        entities:
+          - entity: select.YOUR_INVERTER_SERIAL_battery_pause_mode
+            name: Pause mode
+            icon: mdi:pause-circle
+          - entity: select.YOUR_INVERTER_SERIAL_battery_pause_start_time_slot
+            name: Pause start
+            icon: mdi:clock-start
+          - entity: select.YOUR_INVERTER_SERIAL_battery_pause_end_time_slot
+            name: Pause end
+            icon: mdi:clock-end
+          - type: section
+            label: Temporary pause
+          - entity: select.YOUR_INVERTER_SERIAL_temp_pause_charge
+            name: Pause charge
+            icon: mdi:battery-charging-off
+          - entity: number.YOUR_INVERTER_SERIAL_temp_pause_charge_num
+            name: Pause charge duration (mins)
+            icon: mdi:timer-pause
+          - entity: select.YOUR_INVERTER_SERIAL_temp_pause_discharge
+            name: Pause discharge
+            icon: mdi:battery-off
+          - entity: number.YOUR_INVERTER_SERIAL_temp_pause_discharge_num
+            name: Pause discharge duration (mins)
+            icon: mdi:timer-pause
+      - type: entities
+        title: PRISM override
+        show_header_toggle: false
+        entities:
+          - entity: input_boolean.energy_maintenance_mode
+            name: Maintenance mode (disables PRISM)
+            icon: mdi:account-wrench
+          - entity: input_number.prism_export_timeout_mins
+            name: Export safety timeout (mins)
+            icon: mdi:timer-alert
+      - type: entities
+        title: System maintenance
+        show_header_toggle: false
+        entities:
+          - entity: sensor.YOUR_INVERTER_SERIAL_status
+            name: Inverter status
+            icon: mdi:check-circle
+          - entity: sensor.YOUR_INVERTER_SERIAL_givtcp_version
+            name: GivTCP version
+            icon: mdi:tag
+          - entity: sensor.YOUR_INVERTER_SERIAL_invertor_firmware
+            name: Firmware
+            icon: mdi:chip
+          - entity: sensor.YOUR_INVERTER_SERIAL_last_updated_time
+            name: Last updated
+            icon: mdi:update
+          - entity: select.YOUR_INVERTER_SERIAL_battery_calibration
+            name: Battery calibration
+            icon: mdi:battery-sync
+          - type: section
+            label: Actions
+          - entity: button.YOUR_INVERTER_SERIAL_sync_time
+            name: Sync inverter time
+            icon: mdi:clock-check
+          - entity: button.YOUR_INVERTER_SERIAL_reboot_addon
+            name: Reboot GivTCP addon
+            icon: mdi:restart
+          - entity: button.YOUR_INVERTER_SERIAL_reboot_invertor
+            name: Reboot inverter
+            icon: mdi:restart-alert
+      - type: entities
+        title: PRISM manual triggers
+        show_header_toggle: false
+        entities:
+          - type: button
+            name: Run midday recalculation
+            icon: mdi:refresh
+            action_name: Run
+            tap_action:
+              action: call-service
+              service: script.prism_trigger_midday_recalc
+          - type: button
+            name: Run startup check
+            icon: mdi:power-cycle
+            action_name: Run
+            tap_action:
+              action: call-service
+              service: script.prism_trigger_startup_check
+          - type: button
+            name: Run health check
+            icon: mdi:heart-pulse
+            action_name: Run
+            tap_action:
+              action: call-service
+              service: script.prism_trigger_health_check
+          - type: button
+            name: Force charge to 100%
+            icon: mdi:battery-charging-100
+            action_name: Run
+            tap_action:
+              action: call-service
+              service: script.prism_trigger_force_charge
+          - type: button
+            name: Force no charge tonight
+            icon: mdi:battery-off
+            action_name: Run
+            tap_action:
+              action: call-service
+              service: script.prism_trigger_force_no_charge

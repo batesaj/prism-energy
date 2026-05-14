@@ -1,0 +1,55 @@
+# =============================================================
+# PRISM v1.0 — SCRIPTS
+# /homeassistant/scripts.yaml
+# Fire prism_trigger events consumed by PrismEngine._handle_trigger_event()
+# Uses 'event:' syntax (HA 2021.x+) — not 'action: event.fire'
+# =============================================================
+
+prism_trigger_midday_recalc:
+  alias: PRISM - Run Midday Recalculation
+  icon: mdi:refresh
+  sequence:
+    - event: prism_trigger
+      event_data:
+        action: midday_recalculation
+
+prism_trigger_startup_check:
+  alias: PRISM - Run Startup Check
+  icon: mdi:power-cycle
+  sequence:
+    - event: prism_trigger
+      event_data:
+        action: startup_check
+
+prism_trigger_health_check:
+  alias: PRISM - Run Health Check
+  icon: mdi:heart-pulse
+  sequence:
+    - event: prism_trigger
+      event_data:
+        action: health_check
+
+prism_trigger_overnight_decision:
+  alias: PRISM - Run Overnight Decision Now
+  icon: mdi:brain
+  sequence:
+    - event: prism_trigger
+      event_data:
+        action: overnight_decision
+
+prism_trigger_force_charge:
+  alias: PRISM - Force Charge to 100%
+  icon: mdi:battery-charging-100
+  sequence:
+    - event: prism_trigger
+      event_data:
+        action: force_charge
+        target_soc: 100
+
+prism_trigger_force_no_charge:
+  alias: PRISM - Force No Charge Tonight
+  icon: mdi:battery-off
+  sequence:
+    - event: prism_trigger
+      event_data:
+        action: force_no_charge

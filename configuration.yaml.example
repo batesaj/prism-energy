@@ -1,0 +1,197 @@
+default_config:
+
+frontend:
+  themes: {}
+
+automation: !include automations.yaml
+script: !include scripts.yaml
+scene: !include scenes.yaml
+
+# -------------------------------------------------------------
+# HELPERS
+# -------------------------------------------------------------
+
+input_datetime:
+  energy_last_action_time:
+    name: Energy Last Action Time
+    has_date: true
+    has_time: true
+
+  prism_last_export_end:
+    name: PRISM Last Export End
+    has_date: true
+    has_time: true
+
+input_number:
+  prism_pv_baseline:
+    name: PRISM PV Baseline
+    min: 0
+    max: 10000
+    step: 1
+    initial: 0
+
+  prism_battery_capacity:
+    name: PRISM Battery Capacity
+    min: 1
+    max: 20
+    step: 0.1
+    initial: 13
+
+  prism_export_timeout_mins:
+    name: PRISM Export Safety Timeout (mins)
+    min: 15
+    max: 180
+    step: 5
+    initial: 60
+    icon: mdi:timer-alert
+
+# NOTE: prism_soc_forecast_error and prism_soc_accuracy_score must be created
+# via the HA UI (Settings -> Helpers -> Add Helper -> Number).
+# Entity IDs: input_number.prism_soc_forecast_error
+#             input_number.prism_soc_accuracy_score
+
+input_boolean:
+  energy_maintenance_mode:
+    name: Energy Maintenance Mode
+    icon: mdi:account-wrench
+
+# -------------------------------------------------------------
+# REST SENSOR -- Open-Meteo solar + temperature + weather
+# Replace latitude and longitude with your location.
+# Free API — no key required.
+# -------------------------------------------------------------
+rest:
+  - resource: >
+      https://api.open-meteo.com/v1/forecast?latitude=YOUR_LATITUDE&longitude=YOUR_LONGITUDE&hourly=cloud_cover,shortwave_radiation,temperature_2m,weathercode,precipitation_probability,precipitation&forecast_days=2
+    scan_interval: 1800
+    sensor:
+      - name: solar_weather_raw
+        value_template: "{{ now().isoformat() }}"
+        json_attributes_path: "$.hourly"
+        json_attributes:
+          - time
+          - cloud_cover
+          - shortwave_radiation
+          - temperature_2m
+          - weathercode
+          - precipitation_probability
+          - precipitation
+
+# -------------------------------------------------------------
+# TEMPLATE SENSORS
+# -------------------------------------------------------------
+template: !include templates/energy_sensors.yaml
+
+# -------------------------------------------------------------
+# RECORDER
+# Replace all sensor entity IDs with your own inverter prefix
+# and Octopus account IDs. See README for details.
+# -------------------------------------------------------------
+recorder:
+  purge_keep_days: 120
+  include:
+    entities:
+      # GivEnergy live power — replace YOUR_INVERTER_SERIAL
+      - sensor.YOUR_INVERTER_SERIAL_soc
+      - sensor.YOUR_INVERTER_SERIAL_pv_power
+      - sensor.YOUR_INVERTER_SERIAL_load_power
+      - sensor.YOUR_INVERTER_SERIAL_grid_power
+      - sensor.YOUR_INVERTER_SERIAL_export_power
+      - sensor.YOUR_INVERTER_SERIAL_import_power
+      - sensor.YOUR_INVERTER_SERIAL_battery_power
+      - sensor.YOUR_INVERTER_SERIAL_battery_voltage
+      - sensor.YOUR_INVERTER_SERIAL_invertor_temperature
+
+      # GivEnergy energy totals
+      - sensor.YOUR_INVERTER_SERIAL_pv_energy_today_kwh
+      - sensor.YOUR_INVERTER_SERIAL_export_energy_today_kwh
+      - sensor.YOUR_INVERTER_SERIAL_import_energy_today_kwh
+      - sensor.YOUR_INVERTER_SERIAL_battery_charge_energy_today_kwh
+      - sensor.YOUR_INVERTER_SERIAL_battery_discharge_energy_today_kwh
+      - sensor.YOUR_INVERTER_SERIAL_load_energy_today_kwh
+      - sensor.YOUR_INVERTER_SERIAL_pv_energy_total_kwh
+      - sensor.YOUR_INVERTER_SERIAL_export_energy_total_kwh
+      - sensor.YOUR_INVERTER_SERIAL_import_energy_total_kwh
+      - sensor.YOUR_INVERTER_SERIAL_self_consumption_energy_today_kwh
+
+      # Octopus Energy — replace with your account sensor IDs
+      # Find these in HA Developer Tools > States, search "octopus_energy"
+      - sensor.octopus_energy_electricity_YOUR_MPAN_YOUR_SERIAL_current_rate
+      - sensor.octopus_energy_electricity_YOUR_MPAN_YOUR_SERIAL_next_rate
+      - sensor.octopus_energy_electricity_YOUR_MPAN_YOUR_SERIAL_previous_rate
+      - sensor.octopus_energy_electricity_YOUR_MPAN_YOUR_EXPORT_SERIAL_export_current_rate
+      - sensor.octopus_energy_electricity_YOUR_MPAN_YOUR_EXPORT_SERIAL_export_next_rate
+      - sensor.octopus_energy_electricity_YOUR_MPAN_YOUR_SERIAL_current_accumulative_cost
+      - sensor.octopus_energy_electricity_YOUR_MPAN_YOUR_SERIAL_current_accumulative_consumption
+      - sensor.octopus_energy_gas_YOUR_MPRN_YOUR_GAS_SERIAL_current_accumulative_cost
+      - sensor.octopus_energy_gas_YOUR_MPRN_YOUR_GAS_SERIAL_current_accumulative_consumption_kwh
+
+      # PRISM template sensors
+      - sensor.prism_export_window_state
+      - sensor.prism_export_window_active
+      - sensor.prism_event_state
+      - sensor.prism_solar_export_contribution
+      - sensor.prism_battery_export_contribution
+      - sensor.prism_export_limit_headroom
+      - sensor.prism_solar_cutout_risk
+      - sensor.prism_free_energy_opportunity
+      - sensor.solar_forecast_kwh
+      - sensor.prism_solar_forecast_corrected
+      - sensor.prism_cloud_factor
+      - sensor.prism_solar_geometry_factor
+      - sensor.prism_forecast_confidence
+      - sensor.energy_insight
+      - sensor.energy_system_health
+      - sensor.cost_insight
+
+      # PRISM contextual
+      - sensor.prism_ambient_temp_now
+      - sensor.prism_ambient_temp_forecast_low
+      - sensor.prism_ambient_temp_forecast_high
+      - sensor.prism_heating_demand_predicted
+      - sensor.prism_day_type
+      - sensor.prism_solar_start_hour
+      - sensor.prism_solar_end_hour
+      - sensor.prism_weather_condition
+      - sensor.prism_degree_days_today
+      - binary_sensor.workday
+      - binary_sensor.workday_tomorrow
+
+      # PRISM AppDaemon outputs
+      - sensor.prism_status
+      - sensor.prism_charge_decision
+      - sensor.prism_health_status
+      - sensor.prism_shift_today
+      - sensor.prism_solar_correction_factor
+      - sensor.prism_energy_deficit_kwh
+      - sensor.prism_predicted_min_soc_tomorrow
+      - sensor.prism_mae_7d
+      - sensor.prism_confidence_trend
+      - sensor.prism_savings_today
+      - sensor.prism_evening_min_soc_actual
+
+      # Battery split sensors
+      - sensor.battery_charge_power
+      - sensor.battery_discharge_power
+
+      # Solcast capped sensors
+      - sensor.solcast_power_now_capped
+      - sensor.solcast_peak_tomorrow_capped
+      - sensor.solcast_forecast_today_capped
+      - sensor.solcast_forecast_tomorrow_capped
+
+      # Helpers
+      - input_number.prism_soc_forecast_error
+      - input_number.prism_soc_accuracy_score
+      - input_number.prism_battery_capacity
+      - input_number.prism_export_timeout_mins
+      - input_boolean.energy_maintenance_mode
+
+      # Growatt — replace YOUR_GROWATT_SERIAL
+      - sensor.YOUR_GROWATT_SERIAL_energy_today_input_1
+      - sensor.YOUR_GROWATT_SERIAL_energy_today_input_2
+      - sensor.YOUR_GROWATT_SERIAL_energy_today
+      - sensor.YOUR_GROWATT_SERIAL_input_1_wattage
+      - sensor.YOUR_GROWATT_SERIAL_input_2_wattage
+      - sensor.YOUR_GROWATT_SERIAL_lifetime_total_energy_input_1
+      - sensor.YOUR_GROWATT_SERIAL_lifetime_total_energy_input_2

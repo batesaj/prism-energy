@@ -1,0 +1,595 @@
+sensor:
+
+# =============================================================
+# SECTION 1 -- SOLAR FORECASTING
+# =============================================================
+
+  - name: PRISM Cloud Factor
+    unique_id: prism_cloud_factor
+    state: >
+      {% set cloud = state_attr('sensor.solar_weather_raw', 'cloud_cover') %}
+      {% if cloud is none or cloud | length == 0 %}
+        0.5
+      {% else %}
+        {% set h = now().hour %}
+        {% set c = cloud[h] | float(50) %}
+        {{ (1 - (c / 100)) | round(2) }}
+      {% endif %}
+
+  - name: PRISM Solar Geometry Factor
+    unique_id: prism_solar_geometry_factor
+    state: >
+      {% set h = now().hour %}
+      {% if 11 <= h <= 14 %} 1.0
+      {% elif 9 <= h <= 16 %} 0.8
+      {% elif 7 <= h <= 18 %} 0.5
+      {% else %} 0.0
+      {% endif %}
+
+  - name: Solar Forecast kWh
+    unique_id: solar_forecast_kwh
+    unit_of_measurement: "kWh"
+    state: >
+      {% set solcast = states('sensor.solcast_pv_forecast_forecast_today') | float(0) %}
+      {% if solcast > 0 %}
+        {{ solcast | round(2) }}
+      {% else %}
+        {% set rad = state_attr('sensor.solar_weather_raw', 'shortwave_radiation') %}
+        {% set cloud = state_attr('sensor.solar_weather_raw', 'cloud_cover') %}
+        {% if rad is none or cloud is none %}
+          0
+        {% else %}
+          {% set panels = 20 %}
+          {% set rating_kw = 0.440 %}
+          {% set total = namespace(v=0) %}
+          {% for i in range(24) %}
+            {% set r = rad[i] | float(0) %}
+            {% set c = cloud[i] | float(0) %}
+            {% set total.v = total.v + (r / 1000) * ((100 - c) / 100) * panels * rating_kw %}
+          {% endfor %}
+          {{ total.v | round(2) }}
+        {% endif %}
+      {% endif %}
+
+  - name: PRISM Solar Forecast Corrected
+    unique_id: prism_solar_forecast_corrected
+    unit_of_measurement: "kWh"
+    state: >
+      {% set base = states('sensor.solar_forecast_kwh') | float(0) %}
+      {% set cloud = states('sensor.prism_cloud_factor') | float(1) %}
+      {% set geo = states('sensor.prism_solar_geometry_factor') | float(1) %}
+      {{ (base * cloud * geo) | round(2) }}
+
+  - name: PRISM PV Baseline Display
+    unique_id: prism_pv_baseline_display
+    unit_of_measurement: "W"
+    state: "{{ states('input_number.prism_pv_baseline') | float(0) }}"
+
+
+# =============================================================
+# SECTION 2 -- INSIGHT & HEALTH
+# =============================================================
+
+  - name: PRISM Export Window State
+    unique_id: prism_export_window_state
+    state: >
+      {% set export = states('sensor.YOUR_INVERTER_SERIAL_export_power') | float(0) %}
+      {% set soc = states('sensor.YOUR_INVERTER_SERIAL_soc') | float(0) %}
+      {% set export_rate = states('sensor.octopus_energy_electricity_YOUR_MPAN_YOUR_EXPORT_SERIAL_export_current_rate') | float(0) %}
+      {% if export > 500 and soc > 20 and export_rate > 0.20 %}
+        EXPORT_ACTIVE
+      {% elif export > 200 and soc > 20 %}
+        EXPORT_WEAK
+      {% elif export_rate > 0.20 and soc > 60 %}
+        EXPORT_READY
+      {% else %}
+        NO_EXPORT
+      {% endif %}
+
+  - name: Cost Insight
+    unique_id: cost_insight
+    state: >
+      {% set rate = states('sensor.octopus_energy_electricity_YOUR_MPAN_YOUR_SERIAL_current_rate') | float(0) %}
+      {% if rate < 0.16 %}    CHEAP
+      {% elif rate > 0.28 %}  EXPENSIVE
+      {% else %}              NORMAL
+      {% endif %}
+
+  - name: Energy Insight
+    unique_id: energy_insight
+    state: >
+      {% set export = states('sensor.YOUR_INVERTER_SERIAL_export_power') | float(0) %}
+      {% set imp = states('sensor.YOUR_INVERTER_SERIAL_import_power') | float(0) %}
+      {% set soc = states('sensor.YOUR_INVERTER_SERIAL_soc') | float(0) %}
+      {% set solar = states('sensor.YOUR_INVERTER_SERIAL_pv_power') | float(0) %}
+      {% if export > 1000 and soc < 50 %}  EXPORT_WARNING
+      {% elif imp > 1000 and soc > 40 %}   IMPORT_WARNING
+      {% elif soc > 90 and solar > 2000 %} EXPORT_READY
+      {% elif soc < 20 %}                  BATTERY_LOW
+      {% elif solar > 3000 %}              SOLAR_SURPLUS
+      {% else %}                           OPTIMAL
+      {% endif %}
+
+  - name: Energy System Health
+    unique_id: energy_system_health
+    state: >
+      {% set checks = [
+        states('sensor.YOUR_INVERTER_SERIAL_soc'),
+        states('sensor.YOUR_INVERTER_SERIAL_pv_power'),
+        states('sensor.YOUR_INVERTER_SERIAL_load_power'),
+        states('sensor.solar_weather_raw'),
+        states('sensor.prism_status')
+      ] %}
+      {% set bad = checks | select('in', ['unknown', 'unavailable', '']) | list %}
+      {% if bad | length > 0 %}
+        DEGRADED
+      {% else %}
+        OK
+      {% endif %}
+
+  - name: PRISM Forecast Confidence
+    unique_id: prism_forecast_confidence
+    unit_of_measurement: "%"
+    state: >
+      {% set error = states('input_number.prism_soc_forecast_error') | float(0) %}
+      {% set cloud = state_attr('sensor.solar_weather_raw', 'cloud_cover') %}
+      {% set weather_ok = cloud is not none %}
+      {% set score = 100 %}
+      {% set score = score - ([error | abs, 40] | min) %}
+      {% if not weather_ok %}
+        {% set score = score - 30 %}
+      {% endif %}
+      {{ [score, 0] | max | round(0) | int }}
+
+
+# =============================================================
+# SECTION 3 -- PRISM EVENT DETECTION
+# =============================================================
+
+  - name: PRISM Export Window Active
+    unique_id: prism_export_window_active
+    state: >
+      {% set mode = states('select.YOUR_INVERTER_SERIAL_mode') %}
+      {% set export = states('sensor.YOUR_INVERTER_SERIAL_export_power') | float(0) %}
+      {% set battery = states('sensor.YOUR_INVERTER_SERIAL_battery_power') | float(0) %}
+      {% if mode in ['Timed Demand', 'Timed Export'] and export > 2000 and battery > 0 %}
+        on
+      {% else %}
+        off
+      {% endif %}
+
+  - name: PRISM Event State
+    unique_id: prism_event_state
+    state: >
+      {% set mode = states('select.YOUR_INVERTER_SERIAL_mode') %}
+      {% set export = states('sensor.YOUR_INVERTER_SERIAL_export_power') | float(0) %}
+      {% set battery = states('sensor.YOUR_INVERTER_SERIAL_battery_power') | float(0) %}
+      {% set pv = states('sensor.YOUR_INVERTER_SERIAL_pv_power') | float(0) %}
+      {% if mode in ['Timed Demand', 'Timed Export'] and export > 2000 and battery > 0 %}
+        PRISM_EXPORTING
+      {% elif mode in ['Timed Demand', 'Timed Export'] and export > 500 %}
+        PRISM_EXPORT_STARTING
+      {% elif mode not in ['Eco', 'unknown'] and export > 1000 %}
+        PRISM_SUSPECTED
+      {% elif battery < -500 and pv > 1000 %}
+        SOLAR_RECOVERY
+      {% else %}
+        NORMAL
+      {% endif %}
+
+  - name: PRISM Solar Export Contribution
+    unique_id: prism_solar_export_contribution
+    unit_of_measurement: "W"
+    state: >
+      {% set pv = states('sensor.YOUR_INVERTER_SERIAL_pv_power') | float(0) %}
+      {% set load = states('sensor.YOUR_INVERTER_SERIAL_load_power') | float(0) %}
+      {{ [pv - load, 0] | max | round(0) | int }}
+
+  - name: PRISM Battery Export Contribution
+    unique_id: prism_battery_export_contribution
+    unit_of_measurement: "W"
+    state: >
+      {% set battery = states('sensor.YOUR_INVERTER_SERIAL_battery_power') | float(0) %}
+      {{ [battery, 0] | max | round(0) | int }}
+
+  - name: PRISM Export Limit Headroom
+    unique_id: prism_export_limit_headroom
+    unit_of_measurement: "W"
+    state: >
+      {% set export = states('sensor.YOUR_INVERTER_SERIAL_export_power') | float(0) %}
+      {% set limit = states('sensor.YOUR_INVERTER_SERIAL_export_limit') | float(4500) %}
+      {{ [limit - export, 0] | max | round(0) | int }}
+
+  - name: PRISM Solar Cutout Risk
+    unique_id: prism_solar_cutout_risk
+    state: >
+      {% set headroom = states('sensor.prism_export_limit_headroom') | float(0) %}
+      {% set active = states('sensor.prism_export_window_active') %}
+      {% if active == 'on' and headroom < 200 %}
+        HIGH
+      {% elif active == 'on' and headroom < 500 %}
+        MEDIUM
+      {% elif active == 'on' %}
+        LOW
+      {% else %}
+        NONE
+      {% endif %}
+
+  - name: PRISM Free Energy Opportunity
+    unique_id: prism_free_energy_opportunity
+    state: >
+      {% set rate = states('sensor.octopus_energy_electricity_YOUR_MPAN_YOUR_SERIAL_current_rate') | float(0) %}
+      {% set next_rate = states('sensor.octopus_energy_electricity_YOUR_MPAN_YOUR_SERIAL_next_rate') | float(0) %}
+      {% set soc = states('sensor.YOUR_INVERTER_SERIAL_soc') | float(0) %}
+      {% set export = states('sensor.YOUR_INVERTER_SERIAL_export_power') | float(0) %}
+      {% if soc >= 98 and export > 500 %}
+        IGNORE_EXPORTING_FULL
+      {% elif rate <= 0 %}
+        FREE_NOW
+      {% elif next_rate <= 0 %}
+        FREE_NEXT_SLOT
+      {% elif rate < 0.05 %}
+        VERY_CHEAP_NOW
+      {% elif next_rate < 0.05 %}
+        VERY_CHEAP_NEXT_SLOT
+      {% else %}
+        NONE
+      {% endif %}
+
+
+# =============================================================
+# SECTION 4 -- PRISM CONTEXTUAL INTELLIGENCE
+# =============================================================
+
+  - name: PRISM Ambient Temp Now
+    unique_id: prism_ambient_temp_now
+    unit_of_measurement: "C"
+    state: >
+      {% set temps = state_attr('sensor.solar_weather_raw', 'temperature_2m') %}
+      {% if temps is none or temps | length == 0 %}
+        10
+      {% else %}
+        {% set h = now().hour %}
+        {{ temps[h] | float(10) | round(1) }}
+      {% endif %}
+
+  - name: PRISM Ambient Temp Forecast Low
+    unique_id: prism_ambient_temp_forecast_low
+    unit_of_measurement: "C"
+    state: >
+      {% set temps = state_attr('sensor.solar_weather_raw', 'temperature_2m') %}
+      {% if temps is none or temps | length == 0 %}
+        8
+      {% else %}
+        {{ temps[:24] | min | round(1) }}
+      {% endif %}
+
+  - name: PRISM Ambient Temp Forecast High
+    unique_id: prism_ambient_temp_forecast_high
+    unit_of_measurement: "C"
+    state: >
+      {% set temps = state_attr('sensor.solar_weather_raw', 'temperature_2m') %}
+      {% if temps is none or temps | length == 0 %}
+        15
+      {% else %}
+        {{ temps[:24] | max | round(1) }}
+      {% endif %}
+
+  - name: PRISM Heating Demand Predicted
+    unique_id: prism_heating_demand_predicted
+    state: >
+      {% set low = states('sensor.prism_ambient_temp_forecast_low') | float(10) %}
+      {% if low < 5 %}    HIGH
+      {% elif low < 10 %} MEDIUM
+      {% elif low < 15.5 %} LOW
+      {% else %}          NONE
+      {% endif %}
+
+  - name: PRISM Day Type
+    unique_id: prism_day_type
+    state: >
+      {% set dow = now().strftime('%A') %}
+      {% set workday = is_state('binary_sensor.workday', 'on') %}
+      {% if not workday and dow not in ['Saturday', 'Sunday'] %}
+        BANK_HOLIDAY
+      {% elif dow == 'Saturday' %}
+        SATURDAY
+      {% elif dow == 'Sunday' %}
+        SUNDAY
+      {% else %}
+        {{ dow | upper }}
+      {% endif %}
+
+  - name: PRISM Solar Start Hour
+    unique_id: prism_solar_start_hour
+    unit_of_measurement: "h"
+    state: >
+      {% set rising = state_attr('sun.sun', 'next_rising') %}
+      {% if rising is none %}
+        7
+      {% else %}
+        {{ as_datetime(rising).hour }}
+      {% endif %}
+
+  - name: PRISM Solar End Hour
+    unique_id: prism_solar_end_hour
+    unit_of_measurement: "h"
+    state: >
+      {% set setting = state_attr('sun.sun', 'next_setting') %}
+      {% if setting is none %}
+        20
+      {% else %}
+        {{ as_datetime(setting).hour }}
+      {% endif %}
+
+  - name: PRISM Weather Condition
+    unique_id: prism_weather_condition
+    state: >
+      {% set codes = state_attr('sensor.solar_weather_raw', 'weathercode') %}
+      {% if codes is none or codes | length == 0 %}
+        UNKNOWN
+      {% else %}
+        {% set h = now().hour %}
+        {% set code = codes[h] | int(0) %}
+        {% if code <= 1 %}    CLEAR
+        {% elif code <= 3 %}  PARTLY_CLOUDY
+        {% elif code <= 48 %} FOGGY
+        {% elif code <= 67 %} RAINY
+        {% elif code <= 77 %} SNOWY
+        {% elif code <= 82 %} SHOWERY
+        {% else %}            STORMY
+        {% endif %}
+      {% endif %}
+
+  - name: PRISM Degree Days Today
+    unique_id: prism_degree_days_today
+    unit_of_measurement: "Cd"
+    state: >
+      {% set low = states('sensor.prism_ambient_temp_forecast_low') | float(10) %}
+      {% set high = states('sensor.prism_ambient_temp_forecast_high') | float(15) %}
+      {% set mean = (low + high) / 2 %}
+      {{ [15.5 - mean, 0] | max | round(2) }}
+
+  - name: PRISM Precipitation Probability Now
+    unique_id: prism_precipitation_probability_now
+    unit_of_measurement: "%"
+    state: >
+      {% set precip = state_attr('sensor.solar_weather_raw', 'precipitation_probability') %}
+      {% if precip is none or precip | length == 0 %}
+        0
+      {% else %}
+        {% set h = now().hour %}
+        {{ precip[h] | int(0) }}
+      {% endif %}
+
+  - name: PRISM Precipitation Today
+    unique_id: prism_precipitation_today
+    unit_of_measurement: "mm"
+    state: >
+      {% set rain = state_attr('sensor.solar_weather_raw', 'precipitation') %}
+      {% if rain is none or rain | length == 0 %}
+        0
+      {% else %}
+        {{ rain[:24] | sum | round(1) }}
+      {% endif %}
+
+  - name: PRISM Precipitation Tomorrow
+    unique_id: prism_precipitation_tomorrow
+    unit_of_measurement: "mm"
+    state: >
+      {% set rain = state_attr('sensor.solar_weather_raw', 'precipitation') %}
+      {% if rain is none or rain | length < 48 %}
+        0
+      {% else %}
+        {{ rain[24:48] | sum | round(1) }}
+      {% endif %}
+
+
+# =============================================================
+# SECTION 5 -- PRISM DECISION VISUALISATION SENSORS
+# These read attributes from sensor.prism_charge_decision
+# (published by AppDaemon at 01:30 and updated at midday recalcs)
+# =============================================================
+
+  - name: PRISM Decision Solar kWh
+    unique_id: prism_decision_solar_kwh
+    unit_of_measurement: "kWh"
+    state: >
+      {% set v = state_attr('sensor.prism_charge_decision', 'solar_kwh') %}
+      {{ v | float(0) | round(2) if v is not none else 0 }}
+
+  - name: PRISM Decision Load kWh
+    unique_id: prism_decision_load_kwh
+    unit_of_measurement: "kWh"
+    state: >
+      {% set v = state_attr('sensor.prism_charge_decision', 'load_kwh') %}
+      {{ v | float(0) | round(2) if v is not none else 0 }}
+
+  - name: PRISM Decision Min SOC
+    unique_id: prism_decision_min_soc
+    unit_of_measurement: "%"
+    state: >
+      {% set v = state_attr('sensor.prism_charge_decision', 'min_soc_evening') %}
+      {{ v | float(0) | round(1) if v is not none else 0 }}
+
+  - name: PRISM Decision Charge Needed
+    unique_id: prism_decision_charge_needed
+    state: >
+      {% set v = state_attr('sensor.prism_charge_decision', 'charge_needed') %}
+      {% if v == true %}YES{% else %}NO{% endif %}
+
+  - name: PRISM Net Energy Tomorrow
+    unique_id: prism_net_energy_tomorrow
+    unit_of_measurement: "kWh"
+    state: >
+      {% set solar = states('sensor.prism_tomorrow_solar_p50') | float(0) %}
+      {% set load = states('sensor.prism_tomorrow_load') | float(0) %}
+      {{ (solar - load) | round(2) }}
+
+  - name: PRISM Solar P10 Tomorrow
+    unique_id: prism_solar_p10_tomorrow
+    unit_of_measurement: "kWh"
+    state: >
+      {% set v = state_attr('sensor.prism_charge_decision', 'solar_p10') %}
+      {{ v | float(0) | round(2) if v is not none else 0 }}
+
+  - name: PRISM Solar P90 Tomorrow
+    unique_id: prism_solar_p90_tomorrow
+    unit_of_measurement: "kWh"
+    state: >
+      {% set v = state_attr('sensor.prism_charge_decision', 'solar_p90') %}
+      {{ v | float(0) | round(2) if v is not none else 0 }}
+
+  - name: PRISM Forecast Weather Class
+    unique_id: prism_forecast_weather_class
+    state: >
+      {% set v = state_attr('sensor.prism_charge_decision', 'weather_class') %}
+      {{ v if v is not none else 'UNKNOWN' }}
+
+  - name: PRISM Eve P10 SOC
+    unique_id: prism_eve_p10_soc
+    unit_of_measurement: "%"
+    state: >
+      {% set v = state_attr('sensor.prism_charge_decision', 'eve_p10') %}
+      {{ v | float(0) | round(1) if v is not none else 0 }}
+
+  - name: PRISM Eve P90 SOC
+    unique_id: prism_eve_p90_soc
+    unit_of_measurement: "%"
+    state: >
+      {% set v = state_attr('sensor.prism_charge_decision', 'eve_p90') %}
+      {{ v | float(0) | round(1) if v is not none else 0 }}
+
+
+# =============================================================
+# SECTION 6 -- SIMULATION CURVE SENSORS
+# AppDaemon publishes sensor.prism_soc_simulation_curve with
+# a 'curve' attribute list of {t, soc, pv_kwh, load_kwh, net_kwh}
+# The 'h' key is NOT in the curve attribute — use index position
+# or the 't' timestamp field for hour lookups.
+# =============================================================
+
+  - name: PRISM Simulation Min SOC
+    unique_id: prism_simulation_min_soc
+    unit_of_measurement: "%"
+    state: >
+      {% set v = state_attr('sensor.prism_soc_simulation_curve', 'min_soc_predicted') %}
+      {{ v | float(0) | round(1) if v is not none else 0 }}
+
+  - name: PRISM Simulation Max SOC
+    unique_id: prism_simulation_max_soc
+    unit_of_measurement: "%"
+    state: >
+      {% set v = state_attr('sensor.prism_soc_simulation_curve', 'max_soc_predicted') %}
+      {{ v | float(0) | round(1) if v is not none else 0 }}
+
+  - name: PRISM Simulation Predicted SOC Now
+    unique_id: prism_simulation_predicted_soc_now
+    unit_of_measurement: "%"
+    state: >
+      {% set curve = state_attr('sensor.prism_soc_simulation_curve', 'curve') %}
+      {% if curve is none or curve | length == 0 %}
+        0
+      {% else %}
+        {% set h = now().hour %}
+        {% set match = curve | selectattr('h', 'eq', h) | list %}
+        {% if match | length > 0 %}
+          {{ match[0].soc | round(1) }}
+        {% else %}
+          {{ curve[h].soc | round(1) if h < curve | length else 0 }}
+        {% endif %}
+      {% endif %}
+
+  - name: PRISM Simulation Solar Forecast
+    unique_id: prism_simulation_solar_forecast
+    unit_of_measurement: "kWh"
+    state: >
+      {% set v = state_attr('sensor.prism_soc_simulation_curve', 'solar_forecast') %}
+      {{ v | float(0) | round(2) if v is not none else 0 }}
+
+  - name: PRISM Simulation Load Forecast
+    unique_id: prism_simulation_load_forecast
+    unit_of_measurement: "kWh"
+    state: >
+      {% set v = state_attr('sensor.prism_soc_simulation_curve', 'load_forecast') %}
+      {{ v | float(0) | round(2) if v is not none else 0 }}
+
+  - name: PRISM Shift Today Template
+    unique_id: prism_shift_today_template
+    state: >
+      {% set pos = ((now().date() - strptime('2026-06-01', '%Y-%m-%d').date()).days % 21) %}
+      {% set pattern = {
+        0:'OFF', 1:'OFF', 2:'OFF', 3:'DAYS', 4:'DAYS', 5:'DAYS', 6:'SUNDAY_WORK',
+        7:'LATES', 8:'LATES', 9:'OFF', 10:'OFF', 11:'OFF', 12:'OFF', 13:'OFF',
+        14:'DAYS', 15:'DAYS', 16:'DAYS', 17:'LATES', 18:'LATES', 19:'LATES', 20:'OFF'
+      } %}
+      {{ pattern.get(pos, 'OFF') }}
+
+  - name: Solcast Peak Time Tomorrow
+    unique_id: solcast_peak_time_tomorrow_formatted
+    state: >
+      {% set t = states('sensor.solcast_pv_forecast_peak_time_tomorrow') %}
+      {% if t not in ('unknown', 'unavailable') %}
+        {{ as_datetime(t).strftime('%H:%M') }}
+      {% else %}
+        unknown
+      {% endif %}
+
+  - name: "Battery Charge Power"
+    unique_id: prism_battery_charge_power
+    unit_of_measurement: W
+    state: >
+      {% set p = states('sensor.YOUR_INVERTER_SERIAL_battery_power') | float(0) %}
+      {{ p if p > 0 else 0 }}
+
+  - name: "Battery Discharge Power"
+    unique_id: prism_battery_discharge_power
+    unit_of_measurement: W
+    state: >
+      {% set p = states('sensor.YOUR_INVERTER_SERIAL_battery_power') | float(0) %}
+      {{ p | abs if p < 0 else 0 }}
+
+  - name: "Solcast Power Now Capped"
+    unique_id: solcast_power_now_capped
+    unit_of_measurement: W
+    state: >
+      {% set p = states('sensor.solcast_pv_forecast_power_now') | float(0) %}
+      {{ [p, 5000] | min | round(0) | int }}
+
+  - name: "Solcast Peak Tomorrow Capped"
+    unique_id: solcast_peak_tomorrow_capped
+    unit_of_measurement: W
+    state: >
+      {% set p = states('sensor.solcast_pv_forecast_peak_forecast_tomorrow') | float(0) %}
+      {{ [p, 5000] | min | round(0) | int }}
+
+  - name: "Solcast Forecast Today Capped"
+    unique_id: solcast_forecast_today_capped
+    unit_of_measurement: kWh
+    state: >
+      {% set raw = states('sensor.solcast_pv_forecast_forecast_today') | float(0) %}
+      {% set ratio = [5000 / 7244, 1.0] | min %}
+      {{ (raw * ratio) | round(2) }}
+
+  - name: "Solcast Forecast Tomorrow Capped"
+    unique_id: solcast_forecast_tomorrow_capped
+    unit_of_measurement: kWh
+    state: >
+      {% set raw = states('sensor.solcast_pv_forecast_forecast_tomorrow') | float(0) %}
+      {% set peak = [states('sensor.solcast_pv_forecast_peak_forecast_tomorrow') | float(0), 100] | max %}
+      {% set ratio = [5000 / peak, 1.0] | min %}
+      {{ (raw * ratio) | round(2) }}
+
+  - name: "PRISM Solar Forecast Today"
+    unique_id: prism_solar_forecast_today
+    unit_of_measurement: kWh
+    state: >
+      {% set v = state_attr('sensor.prism_soc_simulation_curve', 'solar_forecast') %}
+      {{ v | float(0) | round(2) if v is not none else 0 }}
+
+  - name: "PRISM Load Forecast Today"
+    unique_id: prism_load_forecast_today
+    unit_of_measurement: kWh
+    state: >
+      {% set v = state_attr('sensor.prism_soc_simulation_curve', 'load_forecast') %}
+      {{ v | float(0) | round(2) if v is not none else 0 }}
