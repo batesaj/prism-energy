@@ -203,3 +203,42 @@ See [CHANGELOG.md](CHANGELOG.md) for the full evolution from AXLE v3.1 to PRISM 
 ## Licence
 
 MIT — see [LICENSE](LICENSE)
+
+---
+
+## Acknowledgements
+
+PRISM stands on the shoulders of an excellent ecosystem of Home Assistant integrations and open source projects. None of this would be possible without them.
+
+### Core integrations
+
+| Project | Author | What PRISM uses it for |
+|---|---|---|
+| [Solcast for Home Assistant](https://github.com/BJReplay/ha-solcast-solar) | [@BJReplay](https://github.com/BJReplay) | p10/p50/p90 probabilistic solar forecasting — the foundation of every PRISM decision |
+| [GivTCP](https://github.com/britishgas-engineering/givenergy-local) | British Gas Engineering | GivEnergy inverter control and real-time sensor data |
+| [Octopus Energy](https://github.com/BottlecapDave/HomeAssistant-OctopusEnergy) | [@BottlecapDave](https://github.com/BottlecapDave) | Tariff rate sensors, off-peak detection, export rates, accumulative cost tracking |
+| [AppDaemon](https://github.com/AppDaemon/appdaemon) | [@ReneMolenaar](https://github.com/ReneMolenaar) and contributors | Python app runtime inside Home Assistant — PRISM's execution environment |
+
+### Data sources
+
+| Source | What PRISM uses it for |
+|---|---|
+| [Open-Meteo](https://open-meteo.com) | Free, no-key weather API — hourly cloud cover, radiation, temperature, precipitation and weather codes for the next 48 hours. Powers weather classification and the physics-model solar fallback. |
+| [Solcast](https://solcast.com) | Rooftop PV forecast service — free tier available for home systems. Provides the detailedHourly p10/p50/p90 intervals that drive PRISM's probabilistic simulation. |
+
+### Dashboard components
+
+| Component | What PRISM uses it for |
+|---|---|
+| [ApexCharts Card](https://github.com/RomRider/apexcharts-card) | [@RomRider](https://github.com/RomRider) | SOC simulation curve, power history chart, accuracy trend chart |
+| [Power Flow Card Plus](https://github.com/flixlix/power-flow-card-plus) | [@flixlix](https://github.com/flixlix) | Live energy flow visualisation on the main dashboard |
+
+### Optional
+
+| Project | What PRISM uses it for |
+|---|---|
+| [growattServer](https://github.com/indykoning/PyPi_GrowattServer) | [@indykoning](https://github.com/indykoning) | Historical monthly generation data for bootstrapping solar correction factors (optional — bootstrap suppressed if API unavailable) |
+
+---
+
+*If you use PRISM and find it useful, consider starring the repositories above — the authors of these integrations make PRISM possible.*
