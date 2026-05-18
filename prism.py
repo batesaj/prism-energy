@@ -172,8 +172,10 @@ class PrismEngine(hass.Hass):
         self.run_every(self.export_soc_watchdog,   "now+60",  2 * 60)
         self.run_in(self.attempt_growatt_bootstrap, 60)
 
-        # Auto-detect cheap rate window on startup (after sensors load)
+        # Auto-detect cheap rate window — retry every 15 mins in case Octopus sensors
+        # take longer than 120s to populate after HA restart
         self.run_in(lambda k: self._detect_cheap_rate_window(), 120)
+        self.run_every(self._detect_cheap_rate_window, "now+900", 15 * 60)
 
         # Axle Energy VPP — reads from sensor.axle_vpp_event (populated by HA REST sensor)
         self.run_in(self._poll_axle_api, 90)
@@ -843,7 +845,9 @@ class PrismEngine(hass.Hass):
                 p50_hours = []
                 p90_hours = []
 
-                # PATCH 8: Coverage ratio scaling if < 48 intervals
+                # Sum all available intervals — no coverage scaling
+                # Dividing by coverage (< 1.0) would inflate a partial forecast incorrectly
+                # If Solcast has fewer than 48 intervals, just use what's there
                 num_intervals = len(solcast_hourly)
                 coverage = min(1.0, num_intervals / 48.0)
 
@@ -852,9 +856,9 @@ class PrismEngine(hass.Hass):
                     p50_hours.append(float(h.get("pv_estimate",   0)) / 2)
                     p90_hours.append(float(h.get("pv_estimate90", 0)) / 2)
 
-                p10 = sum(p10_hours) / coverage
-                p50 = sum(p50_hours) / coverage
-                p90 = sum(p90_hours) / coverage
+                p10 = sum(p10_hours)
+                p50 = sum(p50_hours)
+                p90 = sum(p90_hours)
 
                 confidence = self._calculate_confidence(p10, p50, p90)
 
@@ -1309,18 +1313,20 @@ class PrismEngine(hass.Hass):
                  f"solar p50={solar_p50:.1f}kWh load={load:.1f}kWh "
                  f"eve p10={eve_p10:.1f}% p50={eve_p50:.1f}% p90={eve_p90:.1f}%")
 
+        # Store intraday forecast in a separate key - never overwrite overnight decision data
         detail = self.memory.get("last_charge_decision_detail", {})
-        detail["simulation"]                = copy.deepcopy(sim_p50)
-        detail["solar_forecast"]            = round(solar_p50, 2)
-        detail["solar_p10"]                 = round(solar_p10, 2)
-        detail["solar_p90"]                 = round(solar_p90, 2)
-        detail["load_forecast"]             = round(load, 2)
-        detail["min_soc_predicted"]         = round(min_soc, 1)
-        detail["min_soc_predicted_evening"] = round(eve_p50, 1)
-        detail["eve_p10"]                   = round(eve_p10, 1)
-        detail["eve_p90"]                   = round(eve_p90, 1)
-        detail["weather_class"]             = weather
-        detail["forecast_confidence"]       = round(confidence, 3)
+        detail["intraday_simulation"]       = copy.deepcopy(sim_p50)
+        detail["intraday_solar_forecast"]   = round(solar_p50, 2)
+        detail["intraday_solar_p10"]        = round(solar_p10, 2)
+        detail["intraday_solar_p90"]        = round(solar_p90, 2)
+        detail["intraday_load_forecast"]    = round(load, 2)
+        detail["intraday_min_soc"]          = round(min_soc, 1)
+        detail["intraday_eve_p50"]          = round(eve_p50, 1)
+        detail["intraday_eve_p10"]          = round(eve_p10, 1)
+        detail["intraday_eve_p90"]          = round(eve_p90, 1)
+        detail["intraday_weather"]          = weather
+        detail["intraday_confidence"]       = round(confidence, 3)
+        detail["intraday_updated_at"]       = datetime.now().isoformat()
         self.memory["last_charge_decision_detail"] = detail
 
         soc_floor = self._soc_floor_from_confidence(confidence)
@@ -1513,6 +1519,10 @@ class PrismEngine(hass.Hass):
                       for h in range(24)]
             raw_total = sum(raw_pv)
             if raw_total > 0 and solar_kwh > 0:
+                # Note: _calculate_hourly_pv applies correction internally, but solar_kwh
+                # already has correction applied via _apply_weather_correction() upstream.
+                # The scale factor (solar_kwh / raw_total) effectively normalises this —
+                # no double correction in practice, but the shape is physics-model-derived.
                 scale = solar_kwh / raw_total
                 hourly_pv = [round(p * scale, 3) for p in raw_pv]
             else:
@@ -2537,6 +2547,7 @@ class PrismEngine(hass.Hass):
             "last_health_notification_date":     "",
             "last_health_fault_date":            "",
             "growatt_monthly_totals":            {},
+            "schema_version":                    1,
             "axle_next_event":                   {},
             "cheap_rate_start":                  2,
             "cheap_rate_end":                    5,
@@ -2547,10 +2558,14 @@ class PrismEngine(hass.Hass):
         }
 
     def _save(self):
+        # Atomic write: temp file + fsync + rename prevents corruption on crash
         tmp = MEMORY_FILE + ".tmp"
         try:
+            self.memory["schema_version"] = 1
             with open(tmp, "w") as f:
                 json.dump(self.memory, f, indent=2, default=str)
+                f.flush()
+                os.fsync(f.fileno())
             os.replace(tmp, MEMORY_FILE)
         except Exception as e:
             self.log(f"Memory save error: {e}", level="ERROR")
