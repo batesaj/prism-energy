@@ -34,6 +34,7 @@ import os
 import copy
 from datetime import datetime, timedelta
 
+
 try:
     import growattServer
     GROWATT_AVAILABLE = True
@@ -60,11 +61,12 @@ _DEFAULTS = {
     "bms_balance_days": 7,
     "shift_cycle_ref": "2026-06-01",
     "shift_cycle_weeks": 3,
-    "inverter_prefix": "YOUR_INVERTER_SERIAL",
-    "growatt_se_sensor": "sensor.YOUR_GROWATT_SERIAL_energy_today_input_1",
-    "growatt_nw_sensor": "sensor.YOUR_GROWATT_SERIAL_energy_today_input_2",
-    "growatt_total_sensor": "sensor.YOUR_GROWATT_SERIAL_energy_today",
+    "inverter_prefix": "aio_ch2344g372",
+    "growatt_se_sensor": "sensor.wnkde2101d_energy_today_input_1",
+    "growatt_nw_sensor": "sensor.wnkde2101d_energy_today_input_2",
+    "growatt_total_sensor": "sensor.wnkde2101d_energy_today",
     "health_check_day": 6,
+    "axle_pence_per_kwh": 100,
     # Octopus Flux unit rates (p/kWh) — used for savings estimate
     "rate_cheap_p": 7.5,
     "rate_peak_p": 37.0,
@@ -138,6 +140,13 @@ class PrismEngine(hass.Hass):
         hist = len(self.memory.get("decision_history", []))
         self.log(f"Memory: {obs} observations | {hist} decision history records")
 
+        # Restore cheap rate window from memory — survives Octopus downtime
+        mem_start = self.memory.get("cheap_rate_start", 0)
+        mem_end   = self.memory.get("cheap_rate_end", 0)
+        if mem_start and mem_end:
+            self.cheap_rate_start = mem_start
+            self.cheap_rate_end   = mem_end
+
         self._restore_live_state()
         self._recover_export_state()
 
@@ -162,6 +171,14 @@ class PrismEngine(hass.Hass):
         self.run_every(self.cheap_rate_watchdog,   "now+60", 30 * 60)
         self.run_every(self.export_soc_watchdog,   "now+60",  2 * 60)
         self.run_in(self.attempt_growatt_bootstrap, 60)
+
+        # Auto-detect cheap rate window on startup (after sensors load)
+        self.run_in(lambda k: self._detect_cheap_rate_window(), 120)
+
+        # Axle Energy VPP — reads from sensor.axle_vpp_event (populated by HA REST sensor)
+        self.run_in(self._poll_axle_api, 90)
+        self.run_every(self._poll_axle_api, "now+600", 10 * 60)
+        self.log(f"Axle Energy VPP: polling enabled ({self.axle_pence_per_kwh}p/kWh)")
 
         # Listen for manual trigger events from HA scripts
         self.listen_event(self._handle_trigger_event, "prism_trigger")
@@ -214,6 +231,9 @@ class PrismEngine(hass.Hass):
                               or _DEFAULTS["growatt_nw_sensor"])
         self.growatt_total = (self.args.get("growatt_total_sensor")
                               or _DEFAULTS["growatt_total_sensor"])
+
+        # Axle Energy VPP
+        self.axle_pence_per_kwh = g("axle_pence_per_kwh", int)
 
     # ITEM 15: Config validation on startup
     def _validate_config(self):
@@ -602,6 +622,7 @@ class PrismEngine(hass.Hass):
             "friendly_name":  "PRISM Shift Today"
         })
         self._publish_observability_sensors()
+        self._axle_publish_sensor()
 
     def _publish_observability_sensors(self):
         month      = datetime.now().month
@@ -1092,6 +1113,17 @@ class PrismEngine(hass.Hass):
                       f"Evening mins: p10={eve_p10:.1f}% p50={eve_p50:.1f}% "
                       f"p90={eve_p90:.1f}% [{weather}]")
 
+        # Axle export headroom — reserve SOC for upcoming export events
+        axle_headroom = self._axle_headroom_needed()
+        if axle_headroom > 0:
+            current_soc = self._f(self.s_soc, soc)
+            soc_available = max(0, current_soc - self.soc_min_floor)
+            if soc_available < axle_headroom:
+                extra = round(axle_headroom - soc_available, 1)
+                needed = max(needed, extra)
+                reason += f" | Axle headroom: +{axle_headroom:.1f}% reserved for export event"
+                self.log(f"Axle headroom: reserving {axle_headroom:.1f}% SOC for export event")
+
         # Winter full charge
         if month in WINTER_MONTHS and solar_p50 < self.winter_solar_threshold:
             needed = max(100 - soc, 0)
@@ -1122,7 +1154,7 @@ class PrismEngine(hass.Hass):
         self._notify_charge_decision(charge_active, target, reason,
                                      solar_p50, load, eve_p50, shift_type)
 
-        sim_store = copy.deepcopy(sim_p50)
+        sim_store = copy.deepcopy(sim_p50)  # deepcopy prevents mutation of simulation results
 
         detail = {
             "date":                    planning_for.strftime("%Y-%m-%d"),
@@ -1451,16 +1483,19 @@ class PrismEngine(hass.Hass):
         sol_end    = int(self._f("sensor.prism_solar_end_hour", 20))
         temp_high  = self._f("sensor.prism_ambient_temp_forecast_high", 20)
 
-        if solcast_hours and isinstance(solcast_hours, list) and len(solcast_hours) >= 24:
-            hourly_pv = []
-            for h in range(24):
-                idx0 = h * 2
-                idx1 = h * 2 + 1
-                val0 = float(solcast_hours[idx0]) if idx0 < len(solcast_hours) else 0.0
-                val1 = float(solcast_hours[idx1]) if idx1 < len(solcast_hours) else 0.0
-                # No double correction — weather correction already applied upstream
-                pv_h = (val0 + val1)
-                hourly_pv.append(round(min(pv_h, self.inverter_limit_kw), 3))
+        if solcast_hours and isinstance(solcast_hours, list) and len(solcast_hours) >= 2:
+            # solcast_hours are half-hourly kWh values (each = 30-min interval)
+            # Pair consecutive entries into hourly totals, pad with 0 if odd length
+            # Handles both full 48-entry tomorrow forecasts and trimmed today_remaining lists
+            entries = list(solcast_hours)
+            if len(entries) % 2 != 0:
+                entries.append(0.0)  # pad to even length
+            paired = [float(entries[i]) + float(entries[i+1])
+                      for i in range(0, len(entries), 2)]
+            # Pad or trim to exactly 24 hours
+            hourly_raw = (paired + [0.0] * 24)[:24]
+            hourly_pv  = [round(min(v, self.inverter_limit_kw), 3) for v in hourly_raw]
+            # No double correction — weather correction already applied upstream
         else:
             rad_all   = self.get_state("sensor.solar_weather_raw",
                                         attribute="shortwave_radiation")
@@ -1494,7 +1529,7 @@ class PrismEngine(hass.Hass):
             hl = load_kwh * weights.get(h, 0.5) / total_weight
 
             if (charge_active and
-                    self.cheap_rate_start <= h < self.cheap_rate_end and
+                    self._is_cheap_rate_hour(h) and
                     soc < charge_target):
                 # Charge with efficiency and SOC taper
                 taper = 1.0
@@ -1535,7 +1570,11 @@ class PrismEngine(hass.Hass):
         pv_se      = self._f(self.growatt_se, 0)
         pv_nw      = self._f(self.growatt_nw, 0)
         pv_actual  = pv_growatt if pv_growatt > 0 else pv_giv
-        forecast   = self._f("sensor.solar_forecast_kwh", 0)
+        # Use Solcast forecast_today as the correction baseline — this is what PRISM uses in decisions
+        # Fall back to Open-Meteo if Solcast unavailable
+        forecast   = self._f("sensor.solcast_pv_forecast_forecast_today", 0)
+        if forecast <= 0:
+            forecast = self._f("sensor.solar_forecast_kwh", 0)
         soc        = self._f(self.s_soc, 50)
         dd         = self._f("sensor.prism_degree_days_today", 0)
         weather    = self._classify_weather(for_tomorrow=False)
@@ -1774,9 +1813,99 @@ class PrismEngine(hass.Hass):
 
     # -- WATCHDOGS --------------------------------------------
 
+
+    def _detect_cheap_rate_window(self):
+        """
+        Auto-detect cheap rate window from Octopus Energy current_day_rates event.
+        Finds the contiguous block of minimum-rate half-hour slots.
+        On success: updates self.cheap_rate_start/end and persists to memory.
+        On failure: restores last good values from memory, falls back to apps.yaml defaults.
+        Returns (start_hour, end_hour) as integers.
+        """
+        import_mpan = "17p0308861_1414235320008"
+        entity_id   = f"event.octopus_energy_electricity_{import_mpan}_current_day_rates"
+
+        try:
+            rates = self.get_state(entity_id, attribute="rates")
+            if not rates or not isinstance(rates, list):
+                raise ValueError("rates attribute unavailable")
+
+            # Find minimum rate value
+            min_rate = min(r["value_inc_vat"] for r in rates)
+
+            # Collect all half-hour slot start hours at minimum rate
+            cheap_slots = []
+            for r in rates:
+                if abs(r["value_inc_vat"] - min_rate) < 0.001:
+                    start_str = r.get("start", "")
+                    if start_str:
+                        dt = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+                        local_dt = dt.astimezone()
+                        cheap_slots.append(local_dt.hour + local_dt.minute / 60)
+
+            if not cheap_slots:
+                raise ValueError("no cheap slots found in rate data")
+
+            cheap_slots = sorted(set(cheap_slots))
+            start_h = int(cheap_slots[0])
+            end_h   = int(cheap_slots[-1]) + 1  # end hour is exclusive
+
+            # Sanity check
+            if not (1 <= end_h - start_h <= 6):
+                raise ValueError(f"implausible window {start_h}-{end_h}h")
+
+            # Success — persist to memory as fallback for future failures
+            changed = (start_h != self.cheap_rate_start or end_h != self.cheap_rate_end)
+            self.cheap_rate_start = start_h
+            self.cheap_rate_end   = end_h
+            self.memory["cheap_rate_start"]       = start_h
+            self.memory["cheap_rate_end"]         = end_h
+            self.memory["cheap_rate_detected_at"] = datetime.now().isoformat()
+            self.memory["cheap_rate_p_per_kwh"]   = round(min_rate * 100, 4)
+            self._save()
+
+            if changed:
+                self.log(f"Tariff auto-detect: cheap rate {start_h:02d}:00-{end_h:02d}:00 "
+                         f"@ {min_rate*100:.2f}p/kWh (saved to memory)")
+            else:
+                self.log(f"Tariff auto-detect: {start_h:02d}:00-{end_h:02d}:00 "
+                         f"@ {min_rate*100:.2f}p/kWh confirmed", level="DEBUG")
+
+            return start_h, end_h
+
+        except Exception as e:
+            # Detection failed — try memory fallback before apps.yaml defaults
+            mem_start = self.memory.get("cheap_rate_start", 0)
+            mem_end   = self.memory.get("cheap_rate_end", 0)
+            detected_at = self.memory.get("cheap_rate_detected_at", "")
+
+            if mem_start and mem_end and detected_at:
+                self.cheap_rate_start = mem_start
+                self.cheap_rate_end   = mem_end
+                self.log(f"Tariff auto-detect failed ({e}) — using last known "
+                         f"{mem_start:02d}:00-{mem_end:02d}:00 (detected {detected_at[:10]})",
+                         level="WARNING")
+                return mem_start, mem_end
+            else:
+                self.log(f"Tariff auto-detect failed ({e}) — no memory fallback, "
+                         f"using apps.yaml {self.cheap_rate_start:02d}:00-{self.cheap_rate_end:02d}:00",
+                         level="WARNING")
+                return self.cheap_rate_start, self.cheap_rate_end
+
+
+    def _is_cheap_rate_hour(self, h=None):
+        """Safe cheap rate check — handles overnight windows (e.g. 23:00-06:00)."""
+        if h is None:
+            h = datetime.now().hour
+        start, end = self.cheap_rate_start, self.cheap_rate_end
+        if end > start:          # normal window e.g. 02:00-05:00
+            return start <= h < end
+        else:                    # overnight crossing e.g. 23:00-06:00
+            return h >= start or h < end
+
     def cheap_rate_watchdog(self, kwargs):
         h = datetime.now().hour
-        if not (self.cheap_rate_start <= h < self.cheap_rate_end):
+        if not self._is_cheap_rate_hour(h):
             return
         last = self.memory.get("last_charge_decision_detail", {})
         if not last.get("charge_needed", False):
@@ -1856,7 +1985,7 @@ class PrismEngine(hass.Hass):
             self.memory["export_start_time"] = datetime.now().isoformat()
             self.memory["export_integral"]   = 0  # ITEM 18: initialise integral
             export_rate = self._f(
-                "sensor.octopus_energy_electricity_YOUR_MPAN_YOUR_EXPORT_SERIAL_export_current_rate", 0)
+                "sensor.octopus_energy_electricity_17p0308861_1470001817084_export_current_rate", 0)
             solcast_now = self._f("sensor.solcast_pv_forecast_power_now", 0)
             try:
                 self.call_service("notify/notify",
@@ -1901,15 +2030,18 @@ class PrismEngine(hass.Hass):
         solar_surplus     = max(0, effective_solar - load_w)
         predicted_discharge = max(500, target_w - solar_surplus)
 
-        # ITEM 18: PI controller with anti-windup
+        # PI controller with anti-windup — tuned for 4.5kW DNO limit
+        # Kp=0.5 (was 0.3) for faster response to export shortfall
+        # Ki=0.08 (was 0.05) for stronger steady-state correction
+        # Minimum discharge floor = target - load (ensure we're always pushing enough)
         export_error = target_w - actual_export
-        Kp = 0.3
-        Ki = 0.05  # integral gain
+        Kp = 0.5
+        Ki = 0.08
 
         integral = self.memory.get("export_integral", 0)
         integral += export_error * Ki
-        # Anti-windup clamp
-        integral = max(-1500, min(1500, integral))
+        # Anti-windup clamp — wider to allow more steady-state correction
+        integral = max(-2000, min(2000, integral))
         self.memory["export_integral"] = integral
 
         correction = export_error * Kp + integral
@@ -1917,7 +2049,9 @@ class PrismEngine(hass.Hass):
         self.memory["export_correction"] = correction
 
         discharge_w = int(predicted_discharge + correction)
-        discharge_w = max(500, min(int(self.inverter_limit_kw * 1000), discharge_w))
+        # Floor: always discharge at least (target - load) so solar shortfall doesn't starve export
+        min_discharge = max(500, int(target_w - load_w))
+        discharge_w = max(min_discharge, min(int(self.inverter_limit_kw * 1000), discharge_w))
 
         self.call_service("number/set_value",
             entity_id=self.e_discharge_rate,
@@ -1938,6 +2072,301 @@ class PrismEngine(hass.Hass):
                 self._save()
                 self.log(f"BMS monitor: full charge detected at {soc}% "
                          f"- timer reset to {today}")
+
+
+    # -- AXLE ENERGY VPP INTEGRATION --------------------------
+
+    def _poll_axle_api(self, kwargs=None):
+        """
+        Read Axle VPP event from sensor.axle_vpp_event — populated by HA REST sensor
+        in configuration.yaml. HA core has full network access; AppDaemon does not.
+        Runs every 10 minutes to check for new/changed events.
+        """
+        state = self.get_state("sensor.axle_vpp_event")
+        if state in (None, "unknown", "unavailable", ""):
+            self.log("Axle: sensor.axle_vpp_event unavailable — check HA REST sensor config", level="WARNING")
+            return
+
+        start_str = self.get_state("sensor.axle_vpp_event", attribute="start_time")
+        end_str   = self.get_state("sensor.axle_vpp_event", attribute="end_time")
+        direction = self.get_state("sensor.axle_vpp_event", attribute="import_export") or "export"
+
+        self.log(f"Axle: sensor state={state} start={start_str} end={end_str}", level="DEBUG")
+
+        data = {
+            "start_time":    start_str,
+            "end_time":      end_str,
+            "import_export": direction,
+        }
+        self._axle_handle_response(data)
+
+    def _axle_handle_response(self, data):
+        """Process Axle API response — called from poll thread."""
+        try:
+            start_str  = data.get("start_time")
+            end_str    = data.get("end_time")
+            direction  = data.get("import_export", "export")
+
+            if start_str and end_str:
+                event = {
+                    "start_time":    start_str,
+                    "end_time":      end_str,
+                    "import_export": direction,
+                    "pence_per_kwh": self.axle_pence_per_kwh,
+                    "fetched_at":    datetime.now().isoformat(),
+                }
+                existing = self.memory.get("axle_next_event", {})
+
+                # Only act on genuinely new events
+                if event["start_time"] != existing.get("start_time"):
+                    self.log(f"Axle API: new event {direction} {start_str} -> {end_str}")
+                    self.memory["axle_next_event"] = event
+
+                    # Add to history if not already present
+                    self._axle_add_history(event)
+
+                    # Send advance notification if event is in the future
+                    self._axle_notify_upcoming(event)
+
+                    # Schedule the event start/end handlers
+                    self._axle_schedule_event(event)
+
+                else:
+                    self.log(f"Axle API: same event {start_str} — no change", level="DEBUG")
+
+            else:
+                # No event scheduled
+                if self.memory.get("axle_next_event"):
+                    self.log("Axle API: no upcoming event")
+                    self.memory["axle_next_event"] = {}
+
+            self._axle_publish_sensor()
+            self._save()
+
+        except Exception as e:
+            self.log(f"Axle handle response error: {e}", level="WARNING")
+
+    def _axle_notify_upcoming(self, event):
+        """Send push notification for a new upcoming event, once per event."""
+        notified = self.memory.get("axle_event_notified", "")
+        if notified == event["start_time"]:
+            return  # already notified for this event
+
+        try:
+            start_dt = datetime.fromisoformat(event["start_time"].replace("Z", "+00:00"))
+            end_dt   = datetime.fromisoformat(event["end_time"].replace("Z", "+00:00"))
+            now      = datetime.now(start_dt.tzinfo)
+
+            if start_dt <= now:
+                return  # event already started, no pre-notification needed
+
+            mins_until = int((start_dt - now).total_seconds() / 60)
+            duration   = int((end_dt - start_dt).total_seconds() / 60)
+            start_local = start_dt.strftime("%H:%M")
+            end_local   = end_dt.strftime("%H:%M")
+
+            self.call_service("notify/notify",
+                title=f"PRISM: Axle export event in {mins_until} mins",
+                message=(f"Export {start_local}–{end_local} ({duration} mins) | "
+                         f"{event['pence_per_kwh']}p/kWh | "
+                         f"SOC now: {self._f(self.s_soc, 0):.0f}%"))
+            self.memory["axle_event_notified"] = event["start_time"]
+            self.log(f"Axle: upcoming event notification sent — {mins_until} mins away")
+
+        except Exception as e:
+            self.log(f"Axle notify error: {e}", level="WARNING")
+
+    def _axle_schedule_event(self, event):
+        """Schedule run_at callbacks for event start and end."""
+        try:
+            start_dt = datetime.fromisoformat(event["start_time"].replace("Z", "+00:00"))
+            end_dt   = datetime.fromisoformat(event["end_time"].replace("Z", "+00:00"))
+            now      = datetime.now(start_dt.tzinfo)
+
+            # Schedule start if still in the future
+            if start_dt > now:
+                delay_s = int((start_dt - now).total_seconds())
+                self.run_in(self._axle_event_start, delay_s, event=event)
+                self.log(f"Axle: event start scheduled in {delay_s}s ({start_dt.strftime('%H:%M')})")
+
+            # Schedule end if still in the future
+            if end_dt > now:
+                delay_s = int((end_dt - now).total_seconds())
+                self.run_in(self._axle_event_end, delay_s, event=event)
+                self.log(f"Axle: event end scheduled in {delay_s}s ({end_dt.strftime('%H:%M')})")
+
+        except Exception as e:
+            self.log(f"Axle schedule error: {e}", level="WARNING")
+
+    def _axle_event_start(self, kwargs):
+        """Called at event start time — switch inverter to Timed Export."""
+        event = kwargs.get("event", {})
+        soc   = self._f(self.s_soc, 0)
+        self.log(f"Axle: export event starting — SOC={soc:.0f}%", level="WARNING")
+
+        # Switch inverter to Timed Export
+        self.call_service("select/select_option",
+            entity_id=self.e_mode, option="Timed Export")
+
+        # Set discharge rate to full — PI controller will regulate from here
+        self.call_service("number/set_value",
+            entity_id=self.e_discharge_rate,
+            value=int(self.inverter_limit_kw * 1000))
+
+        # Flag export as PRISM-initiated so watchdog picks it up correctly
+        self.memory["export_managing"]   = True
+        self.memory["export_start_soc"]  = round(soc, 1)
+        self.memory["export_start_time"] = datetime.now().isoformat()
+        self.memory["export_integral"]   = 0
+        self._save()
+
+        try:
+            end_str = event.get("end_time", "")
+            end_local = ""
+            if end_str:
+                end_dt = datetime.fromisoformat(end_str.replace("Z", "+00:00"))
+                end_local = end_dt.strftime("%H:%M")
+            self.call_service("notify/notify",
+                title="PRISM: Axle export event started",
+                message=(f"Exporting until {end_local} | "
+                         f"{event.get('pence_per_kwh', self.axle_pence_per_kwh)}p/kWh | "
+                         f"SOC: {soc:.0f}%"))
+        except Exception as e:
+            self.log(f"Axle start notify: {e}", level="WARNING")
+
+        self._axle_publish_sensor()
+
+    def _axle_event_end(self, kwargs):
+        """Called at event end time — return inverter to Eco."""
+        event   = kwargs.get("event", {})
+        soc     = self._f(self.s_soc, 0)
+        start_soc = self.memory.get("export_start_soc", soc)
+        start_time = self.memory.get("export_start_time", "")
+        duration_mins = 0
+        if start_time:
+            try:
+                start_dt = datetime.fromisoformat(start_time)
+                duration_mins = int((datetime.now() - start_dt).total_seconds() / 60)
+            except Exception:
+                pass
+
+        battery_used = round(max(0, start_soc - soc) * self.battery_capacity_kwh / 100, 2)
+        estimated_earnings = round(battery_used * event.get("pence_per_kwh", self.axle_pence_per_kwh) / 100, 2)
+
+        self.log(f"Axle: export event ended — {duration_mins} mins | "
+                 f"{battery_used:.1f}kWh used | £{estimated_earnings:.2f} earned")
+
+        # Return to Eco
+        self.call_service("select/select_option",
+            entity_id=self.e_mode, option="Eco")
+        self.call_service("number/set_value",
+            entity_id=self.e_discharge_rate, value=5000)
+
+        self.memory["export_managing"]   = False
+        self.memory["export_integral"]   = 0
+        self.memory["export_correction"] = 0
+        self.memory["axle_next_event"]   = {}
+        self._save()
+
+        try:
+            self.call_service("notify/notify",
+                title="PRISM: Axle export event ended",
+                message=(f"Duration: {duration_mins} mins | "
+                         f"Battery: {start_soc:.0f}% → {soc:.0f}% | "
+                         f"Used: {battery_used:.1f}kWh | "
+                         f"Est. earned: £{estimated_earnings:.2f}"))
+        except Exception as e:
+            self.log(f"Axle end notify: {e}", level="WARNING")
+
+        self._axle_publish_sensor()
+
+    def _axle_add_history(self, event):
+        """Add event to 7-day rolling history, deduplicated by start_time."""
+        history = self.memory.get("axle_event_history", [])
+        cutoff  = (datetime.now() - timedelta(days=7)).isoformat()
+
+        # Prune old events
+        history = [h for h in history if h.get("start_time", "") > cutoff]
+
+        # Add if not already present
+        if not any(h["start_time"] == event["start_time"] for h in history):
+            history.append(event)
+            self.log(f"Axle: event added to history ({len(history)} total)")
+
+        self.memory["axle_event_history"] = history
+
+    def _axle_headroom_needed(self):
+        """
+        Return extra SOC% to reserve for an upcoming Axle export event today/tonight.
+        If an event is scheduled within the next 24h, reserve enough battery headroom
+        to export for the full event duration at the export limit.
+        Returns 0.0 if no event scheduled or event already passed.
+        """
+        event = self.memory.get("axle_next_event", {})
+        if not event or not event.get("start_time"):
+            return 0.0
+        try:
+            start_dt = datetime.fromisoformat(event["start_time"].replace("Z", "+00:00"))
+            end_dt   = datetime.fromisoformat(event["end_time"].replace("Z", "+00:00"))
+            now      = datetime.now(start_dt.tzinfo)
+
+            # Only reserve headroom for events within next 24h
+            if start_dt < now or (start_dt - now).total_seconds() > 86400:
+                return 0.0
+
+            # kWh needed = export_limit * duration_hours
+            duration_h = (end_dt - start_dt).total_seconds() / 3600
+            kwh_needed = self.export_limit_kw * duration_h
+            soc_needed = round((kwh_needed / self.battery_capacity_kwh) * 100, 1)
+            self.log(f"Axle headroom: event {start_dt.strftime('%H:%M')} duration={duration_h:.1f}h "
+                     f"kwh={kwh_needed:.1f} soc_reserve={soc_needed:.1f}%")
+            return soc_needed
+
+        except Exception as e:
+            self.log(f"Axle headroom calc error: {e}", level="WARNING")
+            return 0.0
+
+    def _axle_publish_sensor(self):
+        """Publish sensor.prism_axle_next_event to HA."""
+        event   = self.memory.get("axle_next_event", {})
+        history = self.memory.get("axle_event_history", [])
+        active  = self.memory.get("export_managing", False)
+
+        if event and event.get("start_time"):
+            try:
+                start_dt  = datetime.fromisoformat(event["start_time"].replace("Z", "+00:00"))
+                end_dt    = datetime.fromisoformat(event["end_time"].replace("Z", "+00:00"))
+                now       = datetime.now(start_dt.tzinfo)
+                mins_away = max(0, int((start_dt - now).total_seconds() / 60))
+                duration  = int((end_dt - start_dt).total_seconds() / 60)
+                state = "ACTIVE" if active else ("UPCOMING" if start_dt > now else "PAST")
+                start_local = start_dt.strftime("%H:%M")
+                end_local   = end_dt.strftime("%H:%M")
+            except Exception:
+                state = "UNKNOWN"
+                mins_away = 0
+                duration  = 0
+                start_local = event.get("start_time", "")
+                end_local   = event.get("end_time", "")
+        else:
+            state       = "NONE"
+            mins_away   = 0
+            duration    = 0
+            start_local = ""
+            end_local   = ""
+
+        self.set_state("sensor.prism_axle_next_event", state=state, attributes={
+            "start_time":    event.get("start_time", ""),
+            "end_time":      event.get("end_time", ""),
+            "start_local":   start_local,
+            "end_local":     end_local,
+            "duration_mins": duration,
+            "mins_until":    mins_away,
+            "pence_per_kwh": event.get("pence_per_kwh", self.axle_pence_per_kwh),
+            "import_export": event.get("import_export", "export"),
+            "event_history": history[-10:],  # last 10 events
+            "friendly_name": "PRISM Axle Next Event"
+        })
 
     # -- GROWATT BOOTSTRAP ------------------------------------
 
@@ -2064,6 +2493,8 @@ class PrismEngine(hass.Hass):
                 pass
         elif action == "overnight_decision":
             self.overnight_charge_decision({})
+        elif action == "axle_poll":
+            self._poll_axle_api({})
         else:
             self.log(f"Unknown trigger action: {action}", level="WARNING")
 
@@ -2106,6 +2537,13 @@ class PrismEngine(hass.Hass):
             "last_health_notification_date":     "",
             "last_health_fault_date":            "",
             "growatt_monthly_totals":            {},
+            "axle_next_event":                   {},
+            "cheap_rate_start":                  2,
+            "cheap_rate_end":                    5,
+            "cheap_rate_detected_at":            "",
+            "cheap_rate_p_per_kwh":              0.0,
+            "axle_event_history":                [],
+            "axle_event_notified":               "",
         }
 
     def _save(self):
